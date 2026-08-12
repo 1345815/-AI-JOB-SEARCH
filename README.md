@@ -5,6 +5,17 @@
 # CareerPilot-CN
 *中国版 AI Job Search · AI 求职助手*
 
+<div align="center">
+
+### ⭐ 本项目源自 [AI Job Search](https://github.com/MadsLorentzen/ai-job-search)，为中文本地化版本
+
+**原作者：[Mads Lorentzen](https://github.com/MadsLorentzen)**（[LinkedIn](https://www.linkedin.com/in/mads-lorentzen/)）  
+**原项目：[https://github.com/MadsLorentzen/ai-job-search](https://github.com/MadsLorentzen/ai-job-search)**
+
+本项目保留原项目 **MIT License**（Copyright © 2026 Mads Lorentzen）及全部版权声明；中文适配与本地化改动不改变原开源协议，框架与功能均归功于原作者。
+
+</div>
+
 CareerPilot-CN 是 [AI Job Search](https://github.com/MadsLorentzen/ai-job-search) 的中国校招本地化版本。
 <p align="center">
   <a href="https://trendshift.io/repositories/43622?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-43622" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/43622/daily" alt="MadsLorentzen%2Fai-job-search | Trendshift" width="250" height="55"/></a>
