@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 求职助手使用教学</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px 16px 60px;
+      background: #f6f8f7;
+      color: #1f2937;
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+      line-height: 1.8;
+    }
+    .wrap { max-width: 860px; margin: 0 auto; }
+    h1 { font-size: 28px; margin: 0 0 6px; color: #134e4a; }
+    .subtitle { margin: 0 0 22px; color: #4b5563; }
+    h2 { font-size: 21px; margin: 0 0 10px; color: #134e4a; }
+    h3 { font-size: 17px; margin: 14px 0 6px; color: #374151; }
+    .panel {
+      background: #ffffff;
+      border: 1px solid #e2e8e6;
+      border-radius: 8px;
+      padding: 20px 22px;
+      margin: 16px 0;
+    }
+    code {
+      background: #eef2f1;
+      color: #9d174d;
+      border-radius: 4px;
+      padding: 2px 7px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 15px;
+    }
+    .step {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      margin: 12px 0;
+    }
+    .step-num {
+      flex: 0 0 28px;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #0f766e;
+      color: #ffffff;
+      text-align: center;
+      line-height: 28px;
+      font-weight: 700;
+    }
+    .step-body { min-width: 0; }
+    .tag {
+      display: inline-block;
+      background: #ecfdf5;
+      color: #065f46;
+      border: 1px solid #a7f3d0;
+      border-radius: 4px;
+      padding: 1px 8px;
+      font-size: 13px;
+      margin: 0 4px 4px 0;
+    }
+    table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+    th, td {
+      border: 1px solid #d7e0dc;
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f0faf7; color: #065f46; }
+    .note {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 12px 0;
+      color: #78350f;
+    }
+    ul { margin: 8px 0; padding-left: 22px; }
+    li { margin: 6px 0; }
+    .final { text-align: center; color: #4b5563; margin-top: 22px; }
+    @media (max-width: 600px) {
+      h1 { font-size: 23px; }
+      .panel { padding: 16px; }
+      table { font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>AI 求职助手：一看就懂的使用教学</h1>
+    <p class="subtitle">不用懂代码，按着下面一步一步来就行。</p>
+
+    <div class="panel">
+      <h2>先记住三件事</h2>
+      <ul>
+        <li>打开：双击桌面上的 <strong>AI Job Search - WorkBuddy</strong> 快捷方式。</li>
+        <li>放资料：把自己的简历、毕业证、证书放进项目的 <code>documents</code> 文件夹。</li>
+        <li>下命令：在 WorkBuddy 对话框里输入 <code>/setup</code>、<code>/scrape</code>、<code>/apply</code> 这类斜杠命令。</li>
+      </ul>
+      <div class="note">第一次打开如果让你登录，用 WorkBuddy 账号登录一次。之后每次打开就不用再登了。</div>
+    </div>
+
+    <div class="panel">
+      <h2>第 1 步：让助手认识你（/setup）</h2>
+      <p>先把自己的资料放进这些“抽屉”：</p>
+      <table>
+        <tr><th>放什么</th><th>放在哪里</th></tr>
+        <tr><td>简历 / CV</td><td><code>documents/cv</code></td></tr>
+        <tr><td>毕业证、学位证</td><td><code>documents/diplomas</code></td></tr>
+        <tr><td>实习证明、获奖证书、竞赛证书</td><td><code>documents/references</code></td></tr>
+        <tr><td>领英导出资料</td><td><code>documents/linkedin</code></td></tr>
+      </table>
+      <div class="step"><div class="step-num">1</div><div class="step-body">把资料放好后，在对话框里输入 <code>/setup</code> 并按回车。</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-body">助手会问你一些问题，比如学校、专业、经历、求职方向。你正常回答就行。</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-body">它会把你的信息整理成一份“个人档案”，以后写简历、写求职信都用它。</div></div>
+      <p><span class="tag">以后资料有变化</span> 再运行一次 <code>/setup</code> 就能更新。</p>
+    </div>
+
+    <div class="panel">
+      <h2>第 2 步：找职位（/scrape）</h2>
+      <div class="step"><div class="step-num">1</div><div class="step-body">输入 <code>/scrape</code>，让它按你的求职方向去找职位。</div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-body">想更具体，就输入 <code>/scrape 数据分析</code>、<code>/scrape 运营</code> 这类带关键词的命令。</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-body">它会把找到的职位列出来，你看完可以继续问，比如“这个岗位合适吗”。</div></div>
+      <div class="note">中国招聘网站很多有登录和反爬限制，如果搜不到，助手会用网页搜索帮你找官网招聘信息。不要让它去绕过验证码或付费墙。</div>
+    </div>
+
+    <div class="panel">
+      <h2>第 3 步：挑出最合适的（/rank）</h2>
+      <p>找到一批职位后，输入 <code>/rank</code>。它会按“和你匹配的程度”从高到低排序，方便你先处理最值得投的。</p>
+    </div>
+
+    <div class="panel">
+      <h2>第 4 步：投递申请（/apply）</h2>
+      <div class="step"><div class="step-num">1</div><div class="step-body">把招聘链接复制过来，输入 <code>/apply</code> 和链接，例如：<code>/apply https://example.com/job/123</code></div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-body">它会先分析这个岗位和你合不合适，再问你要不要继续。</div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-body">你同意后，它会生成中文简历 PDF 和求职信 PDF，分别放在 <code>cv</code> 和 <code>cover_letters</code> 文件夹。</div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-body">它会自动记录这次申请，以后方便追踪。</div></div>
+      <div class="note">生成 PDF 时如果弹权限，选“允许”。它是在你自己电脑上编译文件，不是发到别的地方。</div>
+    </div>
+
+    <div class="panel">
+      <h2>第 5 步：准备面试（/interview）</h2>
+      <p>输入 <code>/interview</code>，再告诉它公司或岗位，例如：<code>/interview 字节跳动 数据分析师</code>。它会帮你猜题、准备 STAR 回答，还能和你模拟问答。</p>
+    </div>
+
+    <div class="panel">
+      <h2>第 6 步：查缺补漏（/upskill）</h2>
+      <p>输入 <code>/upskill</code>，它会对比你投过的岗位和你目前的技能，告诉你还差什么，并给出一份学习计划。</p>
+    </div>
+
+    <div class="panel">
+      <h2>这些文件夹是干嘛的</h2>
+      <table>
+        <tr><th>文件夹</th><th>作用</th></tr>
+        <tr><td><code>documents</code></td><td>放你的原始资料：简历、证书、实习证明、获奖证书、领英导出等</td></tr>
+        <tr><td><code>cv</code></td><td>放助手为你生成的简历 PDF 文件</td></tr>
+        <tr><td><code>cover_letters</code></td><td>放助手为你生成的求职信 PDF 文件</td></tr>
+        <tr><td><code>job_scraper</code></td><td>记录已经看过的职位，避免重复推荐</td></tr>
+        <tr><td><code>upskill</code></td><td>放学习计划相关内容</td></tr>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>每天 5 分钟使用流程</h2>
+      <ol>
+        <li>打开快捷方式，进入 WorkBuddy。</li>
+        <li>输入 <code>/scrape</code>，看看今天有没有新职位。</li>
+        <li>输入 <code>/rank</code>，挑出最合适的 2-3 个。</li>
+        <li>对选中的职位输入 <code>/apply</code> + 链接，生成材料。</li>
+        <li>有空就 <code>/interview</code> 练一练面试。</li>
+      </ol>
+    </div>
+
+    <div class="panel">
+      <h2>常见问题</h2>
+      <h3>打开后要我登录怎么办？</h3>
+      <p>用 WorkBuddy 账号登录一次，之后就不用重复登录了。</p>
+      <h3>输入命令没反应？</h3>
+      <p>确认命令以 <code>/</code> 开头，并且是在项目目录里打开的。不要加多余的空格，例如 <code>/scrape</code> 而不是 <code>scrape</code>。</p>
+      <h3>想切回英文简历模板？</h3>
+      <p>输入 <code>/add-template --use default</code>，就会切回项目自带的英文模板。</p>
+      <h3>想加一个新的招聘网站？</h3>
+      <p>输入 <code>/add-portal</code>，按提示操作。</p>
+      <h3>投过的岗位想重新开始？</h3>
+      <p>输入 <code>/reset</code>，可以清空记录重新初始化。</p>
+    </div>
+
+    <div class="panel">
+      <h2>安全小提醒</h2>
+      <ul>
+        <li>不要把银行卡密码、验证码这类信息发给助手。</li>
+        <li>不要让它绕过招聘网站的登录、验证码或付费墙。</li>
+        <li>简历和证书都保存在你自己电脑里，不会自动上传到别处。</li>
+        <li>公司官网的招聘信息，比招聘网站转贴的版本更可靠。</li>
+      </ul>
+    </div>
+
+    <p class="final">记住：打开 → 放资料 → 下命令。剩下的事交给助手。</p>
+  </div>
+</body>
+</html>

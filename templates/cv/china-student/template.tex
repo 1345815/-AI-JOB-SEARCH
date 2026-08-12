@@ -1,0 +1,114 @@
+%% 中文简历模板（中国应届生版）
+%% 使用：xelatex -interaction=nonstopmode <file>.tex
+%% 依赖：moderncv + ctex + fandol 字体（TinyTeX 可安装）
+
+\documentclass[11pt,a4paper,sans]{moderncv}
+\moderncvstyle{banking}
+\moderncvcolor{blue}
+
+\renewcommand*{\firstnamestyle}[1]{{\fontsize{34}{36}\bfseries\upshape\color{color1}#1}}
+\renewcommand*{\lastnamestyle}[1]{{\fontsize{34}{36}\bfseries\upshape\color{color1}#1}}
+\renewcommand*{\sectionstyle}[1]{{\sectionfont\color{color1}#1}}
+
+\usepackage[UTF8,fontset=fandol]{ctex}
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=blue,
+    pdftitle={[姓名] - 简历},
+    pdfpagemode=FullScreen,
+}
+\usepackage[scale=0.80]{geometry}
+\usepackage{import}
+
+\name{[姓名]}{}
+\address{[城市，省份]}{}{}
+\phone[mobile]{[手机号]}
+\email{[邮箱]}
+\extrainfo{[GitHub / 作品集链接]}
+
+\begin{document}
+
+\makecvtitle
+
+\vspace{6pt}
+\small{[一句话定位：应届生 + 专业 + 目标岗位 + 最突出亮点，2-3 行以内]}
+
+\section{教育背景}
+\vspace{1pt}
+\begin{itemize}
+
+\item{\cventry{[2022.09-2026.06]}{[本科/硕士] [专业]}{[学校名称]}{[城市]}{}{\vspace{1pt}
+主修课程：[核心课程1]、[核心课程2]、[核心课程3]。
+}}
+
+\end{itemize}
+
+\section{实习经历}
+\vspace{3pt}
+\begin{itemize}
+
+% --- 最近一段实习 ---
+\item{\cventry{[2025.06-2025.09]}{[实习岗位]}{[公司名称]}{[城市]}{}{\vspace{1pt}
+\begin{itemize}
+    \item [具体工作内容，尽量量化]
+    \item [使用的工具/技术]
+    \item [成果或收获]
+\end{itemize}}}
+
+\end{itemize}
+
+\section{项目经历}
+\vspace{3pt}
+\begin{itemize}
+
+\item{\cventry{[2024.03-2024.06]}{[项目名称]}{[课程设计/毕业设计/开源项目/竞赛]}{[城市]}{}{\vspace{1pt}
+\begin{itemize}
+    \item [项目目标与你的角色]
+    \item [使用的技术栈]
+    \item [可量化成果，如性能提升、获奖、用户反馈]
+\end{itemize}}}
+
+\end{itemize}
+
+\section{校园经历}
+\vspace{1pt}
+\begin{itemize}
+
+\item{\cventry{[2023.09-2024.06]}{[职务]}{[学生会/社团/志愿者组织]}{[城市]}{}{\vspace{1pt}
+\begin{itemize}
+    \item [组织或参与的活动]
+    \item [成果：参与人数、活动规模、获奖等]
+\end{itemize}}}
+
+\end{itemize}
+
+\section{专业技能}
+\vspace{1pt}
+\begin{itemize}
+\item \textbf{[技能类别1]}：[具体技能、框架、工具]
+\item \textbf{[技能类别2]}：[具体技能]
+\item \textbf{[技能类别3]}：[办公/数据分析/设计等]
+\end{itemize}
+
+\section{语言能力}
+\vspace{1pt}
+\begin{itemize}
+\item 中文（母语），英语（[CET-4/CET-6/雅思]）
+\end{itemize}
+
+\section{获奖情况}
+\vspace{1pt}
+\begin{itemize}
+\item [奖学金/竞赛/荣誉称号] - [主办方]（[年份]）
+\end{itemize}
+
+\section{自我评价}
+\vspace{1pt}
+\begin{itemize}
+\item [学习能力、责任心、团队协作等，用 1-2 个事实支撑]
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,183 @@
+%% Example CV - 马育琪
+%% Comprehensive overview of all competencies, experience, and achievements.
+%% Use as a master reference when tailoring role-specific CVs.
+%%
+%% Compile with: lualatex main_example.tex
+%% (pdflatex often fails on modern MiKTeX with fontawesome5 font-expansion errors.)
+
+\documentclass[11pt,a4paper,sans]{moderncv}
+\moderncvstyle{banking}
+\moderncvcolor{blue}
+
+% Force both first and last name AND section headings to render in moderncv
+% blue (color1). Default banking on lualatex+MiKTeX leaves these black, which
+% looks inconsistent with the rest of the blue accent scheme.
+\renewcommand*{\firstnamestyle}[1]{{\fontsize{34}{36}\bfseries\upshape\color{color1}#1}}
+\renewcommand*{\lastnamestyle}[1]{{\fontsize{34}{36}\bfseries\upshape\color{color1}#1}}
+\renewcommand*{\sectionstyle}[1]{{\sectionfont\color{color1}#1}}
+
+\usepackage[utf8]{inputenc}
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=blue,
+    pdftitle={马育琪 - CV},
+    pdfpagemode=FullScreen,
+}
+\usepackage[scale=0.80]{geometry}
+\usepackage{import}
+
+% personal data
+\name{马}{育琪}
+\address{郑州，中国}{}{}
+\phone[mobile]{(+86) 19103716492}
+\email{1466588439@qq.com}
+
+\begin{document}
+
+\makecvtitle
+
+% ============================================================
+%     PROFILE STATEMENT
+% ============================================================
+
+\vspace{6pt}
+\small{2027届飞行器控制与信息工程本科生，AI产品落地经验丰富。独立开发并上线「简历匹配分析器」（AI+NLP在线工具），熟悉ChatGPT/Claude/Coze/Dify/LangChain等AI工具链。在多益网络一线推广中跑通「推广→注册→转化」获客链路。累计体验50+款游戏、覆盖8+品类，长期产出《三国志·战略版》系统拆解案。习惯快节奏、高挑战环境，以"做出用户真实使用的产品"为核心动力。}
+
+% ============================================================
+%     CORE COMPETENCIES
+% ============================================================
+
+\section{Core Competencies}
+\vspace{1pt}
+\begin{itemize}
+
+\item \textbf{AI应用}: LLM调用与Prompt工程；ChatGPT/Claude/Coze/Dify/LangChain；AI产品从0到1落地经验
+
+\item \textbf{游戏设计}: 玩法原型与系统拆解；商业化/留存/社交结构；SLG深度理解；50+款/8+品类游戏体验
+
+\item \textbf{数据与工具}: Python/Pandas/Matplotlib/Excel；数据驱动决策与效果度量；结构化报告20+份
+
+\item \textbf{运营与商业化}: 获客链路（推广→注册→转化）、活动效果跟进、内容创作与变现（抖音MCN/B站）
+
+\item \textbf{产品与工程}: Web/小程序开发；产品原型与快速迭代；系统工程方法
+
+\end{itemize}
+
+% ============================================================
+%     PROFESSIONAL EXPERIENCE
+% ============================================================
+
+\section{Professional Experience}
+\vspace{3pt}
+\begin{itemize}
+
+% --- Most Recent Role ---
+\item{\cventry{2026.06-2026.08}{游戏推广拉新}{多益网络}{}{}{\vspace{1pt}
+\begin{itemize}
+    \item 在官方推广体系中跑通「推广→注册→转化」完整获客链路，从大量真实用户互动中理解新手引导、首日体验与区服生态
+    \item 跟进推广活动效果，收集用户意见并整理反馈，养成用数据观察活动效果与留存变化的习惯
+    \item 熟悉活动运营的执行与复盘流程，能把一线反馈整理成可执行的运营建议
+\end{itemize}}}
+
+\vspace{3pt}
+
+% --- Previous Role ---
+\item{\cventry{2026.03-2026.05}{课程销售与用户沟通}{猿辅导}{}{}{\vspace{1pt}
+\begin{itemize}
+    \item 沉淀「需求挖掘→痛点匹配→方案说明→推动行动」的结构化沟通方法
+    \item 在大量用户沟通中练就快速理解用户需求、组织说服逻辑的能力
+    \item 具备用户洞察与共情表达能力，可迁移至用户运营与营销沟通场景
+\end{itemize}}}
+
+\end{itemize}
+
+% ============================================================
+%     PROJECTS
+% ============================================================
+
+\section{Projects}
+\vspace{3pt}
+\begin{itemize}
+
+\item{\cventry{2025.07-Present}{简历匹配分析器（AI+NLP在线工具，独立开发者）}{}{}{\vspace{1pt}
+\begin{itemize}
+    \item 从0到1完成AI/NLP文本匹配产品并部署上线，真实用户免费使用
+    \item 实践LLM调用、Prompt工程、输出容错与效果评估，熟悉主流AI工具链
+    \item 围绕「输入→解析→匹配→结果呈现」设计完整产品流程，根据用户反馈持续迭代
+\end{itemize}}}
+
+\vspace{3pt}
+
+\item{\cventry{2024.09-Present}{《三国志·战略版》系统拆解与研究}{}{}{\vspace{1pt}
+\begin{itemize}
+    \item 将SLG玩法沉淀为「商业化节奏/留存驱动/社交生态」三层知识结构
+    \item 拆解赛季制、同盟社交、付费节点等机制，持续输出系统拆解案
+    \item 该知识结构化方法可迁移至NPC记忆、世界知识库与AI驱动内容的设计
+\end{itemize}}}
+
+\vspace{3pt}
+
+\item{\cventry{2025.03-Present}{直视招聘—应聘进度管理平台（独立开发者）}{}{}{\vspace{1pt}
+\begin{itemize}
+    \item 从0到1完成Web+小程序双端产品，围绕留存做设计决策
+    \item localStorage降低用户操作成本约40\%、首屏加载<1.5s
+    \item 验证「洞察用户→数据反推→设计优化」闭环
+\end{itemize}}}
+
+\vspace{3pt}
+
+\item{\cventry{2024.04-2024.10}{鹏翼1000超音速公务机设计与仿真（团队队长）}{}{}{\vspace{1pt}
+\begin{itemize}
+    \item 统筹5人跨学科团队交付，主导方案设计与对外答辩，输出报告/PPT 20+份
+    \item 获全国未来飞行器设计大赛河南赛区一等奖
+\end{itemize}}}
+
+\end{itemize}
+
+% ============================================================
+%     EDUCATION
+% ============================================================
+
+\section{Education}
+\vspace{1pt}
+\begin{itemize}
+
+\item{\cventry{2023-2027}{本科 飞行器控制与信息工程}{中原工学院}{郑州}{}{\vspace{1pt}
+2027届应届毕业生。系统工程、控制理论与编程训练；跨学科迁移至AI产品与游戏策划。
+}}
+
+\end{itemize}
+
+% ============================================================
+%     LANGUAGES
+% ============================================================
+
+\section{Languages}
+\vspace{1pt}
+\begin{itemize}
+\item 中文（母语），英语（CET-4，512分，可阅读英文技术文档）。
+\end{itemize}
+
+% ============================================================
+%     HONORS AND AWARDS
+% ============================================================
+
+\section{Honors and Awards}
+\vspace{1pt}
+\begin{itemize}
+\item{\textbf{全国未来飞行器设计大赛 河南赛区省级一等奖} -- 队长（2024）.}
+\item{\textbf{中国大学生工程实践与创新能力大赛 河南省三等奖} -- （2025）.}
+\item{\textbf{中原工学院航模设计大赛 校级三等奖} -- （2024）.}
+\end{itemize}
+
+% ============================================================
+%     PROOF DOCUMENTS (China campus CVs usually omit this)
+% ============================================================
+
+% China campus CVs usually omit the References section and do not attach recommendation letters.
+% If a posting requires it, add one line: "Internship certificates and awards are available on request."
+
+\end{document}
