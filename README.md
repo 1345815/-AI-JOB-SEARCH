@@ -2,10 +2,10 @@
   <img src="assets/mascot/pip_flight_loop.gif" alt="Pip, the courier bird" width="200">
 </p>
 
-# AI Job Search
+# CareerPilot-CN
+*中国版 AI Job Search · AI 求职助手*
 
-*The job search that runs on your machine.*
-
+CareerPilot-CN 是 [AI Job Search](https://github.com/MadsLorentzen/ai-job-search) 的中国校招本地化版本。
 <p align="center">
   <a href="https://trendshift.io/repositories/43622?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-43622" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/43622/daily" alt="MadsLorentzen%2Fai-job-search | Trendshift" width="250" height="55"/></a>
 </p>
