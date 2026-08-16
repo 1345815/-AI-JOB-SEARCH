@@ -56,6 +56,10 @@
     return "zero";
   }
 
+  function profileEmpty() {
+    return !state.profile || !state.profile.name || !state.profile.skills || !state.profile.career_goals;
+  }
+
   function verdictTag(verdict) {
     var cls = "tag-accent";
     if (verdict.indexOf("不建议") >= 0) cls = "tag-danger";
@@ -127,14 +131,16 @@
   function jobCard(job) {
     var ev = job.evaluation || {};
     var score = ev.overall || 0;
-    var cls = scoreClass(score);
+    var needs = !!ev.needs_profile;
+    var cls = needs ? "zero" : scoreClass(score);
+    var scoreText = needs ? "—" : score;
     var demo = job.is_demo ? '<span class="tag">示例</span>' : "";
     var deadline = job.deadline
       ? '<span class="tag ' + (job.deadline < new Date().toISOString().slice(0, 10) ? "tag-danger" : "tag-warn") + '">截止 ' + esc(job.deadline) + "</span>"
       : "";
     return (
       '<div class="list-row job-item' + (state.selectedJobId === job.id ? " selected" : "") + '" data-job="' + esc(job.id) + '">' +
-      '<span class="score-badge ' + cls + '">' + score + "</span>" +
+      '<span class="score-badge ' + cls + '">' + scoreText + "</span>" +
       '<div class="row-main">' +
       '<div class="row-title-wrap"><span class="row-title">' + esc(job.title) + "</span>" + demo + "</div>" +
       '<div class="row-sub">' + esc(job.company) + " · " + esc(job.city) + " · " + esc(job.salary || "薪资未标注") + "</div>" +
@@ -268,7 +274,10 @@
       );
     }).join("") + "</div>";
 
-    var topJobs = jobs.slice().sort(function (a, b) { return (b.evaluation || {}).overall - (a.evaluation || {}).overall; }).slice(0, 6);
+    var empty = profileEmpty();
+    var topJobs = empty
+      ? jobs.slice().sort(function (a, b) { return (b.created_at || "").localeCompare(a.created_at || ""); }).slice(0, 6)
+      : jobs.slice().sort(function (a, b) { return (b.evaluation || {}).overall - (a.evaluation || {}).overall; }).slice(0, 6);
     var recentApps = apps.slice().slice(0, 6);
 
     el("content").innerHTML =
@@ -276,13 +285,13 @@
       '<div class="page-head"><div><h1>求职总览</h1><p>你的 AI 求职工作台：跟踪岗位匹配、申请进度与面试准备。</p></div></div>' +
       '<div class="stat-grid">' +
       statCard("岗位池", jobs.length, "stat-accent", "内置 + 手动录入") +
-      statCard("平均匹配度", avg, "stat-info", "按五维框架评分") +
+      statCard("平均匹配度", empty ? "—" : avg, "stat-info", empty ? "完善档案后启用个性化匹配" : "按五维框架评分") +
       statCard("已投递", applied, "stat-accent", interviewing ? "其中 " + interviewing + " 个面试中" : "等待推进") +
       statCard("Offer", offers, offers ? "stat-warn" : "", upcoming ? upcoming + " 个岗位即将截止" : "加油推进") +
       "</div>" +
       '<div class="grid-2">' +
       '<div class="panel"><div class="panel-head"><strong>岗位匹配分布</strong><span class="sub">按综合评分分档</span></div><div class="panel-body">' + (jobs.length ? chart : emptyBlock("岗位库为空", "在「岗位搜索」中录入或查看示例岗位")) + "</div></div>" +
-      '<div class="panel"><div class="panel-head"><strong>高匹配岗位</strong><span class="sub">评分前 6 名</span></div><div class="panel-body" style="padding:0">' +
+      '<div class="panel"><div class="panel-head"><strong>' + (empty ? "热门岗位" : "高匹配岗位") + '</strong><span class="sub">' + (empty ? "最新收录" : "评分前 6 名") + "</span></div><div class=\"panel-body\" style=\"padding:0\">" +
       (topJobs.length ? topJobs.map(jobCard).join("") : emptyBlock("暂无岗位", "")) +
       "</div></div>" +
       "</div>" +
@@ -358,6 +367,7 @@
   function jobDetail(job) {
     var ev = job.evaluation || {};
     var score = ev.overall || 0;
+    var needs = !!ev.needs_profile;
     var gates = ev.gates || { items: [] };
     var app = state.applications.find(function (a) { return a.job_id === job.id; });
     var gateTags = gates.items.map(function (g) {
@@ -379,18 +389,20 @@
       (job.deadline ? '<span class="tag tag-warn">截止 ' + esc(job.deadline) + "</span>" : "") +
       (job.source ? '<span class="tag">' + esc(job.source) + "</span>" : "") +
       "</div>" +
-      '<div class="detail-score-row"><div class="detail-score">' + score + "</div>" +
-      '<div><div class="detail-verdict">' + esc(ev.verdict || "待评估") + "</div>" +
-      '<div class="detail-summary">' + esc(ev.summary || "") + "</div></div></div>" +
+      '<div class="detail-score-row"><div class="detail-score">' + (needs ? "—" : score) + "</div>" +
+      '<div><div class="detail-verdict">' + esc(needs ? "完善档案后查看匹配度" : (ev.verdict || "待评估")) + "</div>" +
+      '<div class="detail-summary">' + esc(needs ? "先完善个人资料，系统会结合你的技能、经历和职业目标进行五维匹配评分。" : (ev.summary || "")) + "</div></div></div>" +
       (gateTags ? '<div class="detail-meta">' + gateTags + "</div>" : "") +
       "</div>" +
       '<div class="detail-sections">' +
       '<div class="detail-section"><h3>五维评估</h3>' + barChart(ev) + "</div>" +
-      '<div class="detail-section"><h3>为什么匹配 / 为什么保留</h3>' +
-      '<ul class="bullet-list good">' + (ev.strengths || []).map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") + "</ul>" +
-      '<h3 class="mt-14">需要补足</h3>' +
-      '<ul class="bullet-list bad">' + (ev.gaps || []).map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") + "</ul>" +
-      "</div>" +
+      (needs
+        ? '<div class="detail-section"><h3>个性化匹配</h3><div class="muted text-mid">完善档案后，这里会显示你的技能、经历、文化与职业方向匹配分析。</div></div>'
+        : '<div class="detail-section"><h3>为什么匹配 / 为什么保留</h3>' +
+          '<ul class="bullet-list good">' + (ev.strengths || []).map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") + "</ul>" +
+          '<h3 class="mt-14">需要补足</h3>' +
+          '<ul class="bullet-list bad">' + (ev.gaps || []).map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") + "</ul>" +
+          "</div>") +
       '<div class="detail-section full"><h3>岗位描述</h3><div class="text-mid">' + esc(job.description || "无描述") + "</div></div>" +
       '<div class="detail-section full"><h3>任职要求</h3><ul class="bullet-list plain">' +
       (job.requirements || []).map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("") +
