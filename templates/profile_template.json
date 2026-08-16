@@ -1,0 +1,58 @@
+{
+  "name": "",
+  "email": "",
+  "phone": "",
+  "city": "",
+  "status": "",
+  "github": "",
+  "linkedin": "",
+  "location_preference": "",
+  "resume_language": "中文",
+  "languages": [
+    {
+      "name": "",
+      "level": "",
+      "note": ""
+    }
+  ],
+  "education": [
+    {
+      "school": "",
+      "degree": "",
+      "period": "",
+      "detail": ""
+    }
+  ],
+  "experiences": [
+    {
+      "title": "",
+      "company": "",
+      "period": "",
+      "points": []
+    }
+  ],
+  "projects": [
+    {
+      "title": "",
+      "period": "",
+      "points": []
+    }
+  ],
+  "skills": {
+    "strong": [],
+    "moderate": [],
+    "weak": []
+  },
+  "certifications": [],
+  "awards": [],
+  "career_goals": [],
+  "target_sectors": [],
+  "deal_breakers": [],
+  "behavior": {
+    "traits": [],
+    "ideal_environment": "",
+    "energized_by": [],
+    "drained_by": []
+  },
+  "notes": ""
+}

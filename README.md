@@ -17,6 +17,9 @@
 </div>
 
 CareerPilot-CN 是 [AI Job Search](https://github.com/MadsLorentzen/ai-job-search) 的中国校招本地化版本。
+
+> **Web 多用户版**：项目现已提供可部署的 Web 界面，支持注册/登录/游客体验、岗位匹配评分、简历与求职信生成、面试准备和申请进度管理。详见 [`web/README.md`](web/README.md) 与 [`DEPLOY.md`](DEPLOY.md)，本地启动 `python web/server.py`。
+
 <p align="center">
   <a href="https://trendshift.io/repositories/43622?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-43622" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/43622/daily" alt="MadsLorentzen%2Fai-job-search | Trendshift" width="250" height="55"/></a>
 </p>
