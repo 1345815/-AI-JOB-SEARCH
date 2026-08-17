@@ -348,6 +348,13 @@
     el("content").innerHTML =
       '<div class="content-inner">' +
       '<div class="page-head"><div><h1>岗位搜索</h1><p>基于你的档案，按技能、经历、文化与职业方向五维评分。</p></div></div>' +
+      '<div class="panel job-parse-bar mb-14"><div class="panel-body">' +
+      '<div class="flex" style="gap:8px;flex-wrap:wrap">' +
+      '<input id="jobUrlInput" type="url" style="flex:1;min-width:280px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="粘贴岗位网址，自动提取岗位与要求">' +
+      '<button class="btn btn-primary" id="jobUrlParse">快速解析</button>' +
+      "</div>" +
+      '<div id="jobParseStatus" class="mt-8"></div>' +
+      "</div></div>" +
       '<div class="jobs-layout">' + listHtml + '<div class="jobs-detail">' + detailHtml + "</div></div>" +
       "</div>";
 
@@ -361,7 +368,38 @@
     document.querySelectorAll("[data-sort]").forEach(function (btn) {
       btn.addEventListener("click", function () { state.jobSort = btn.getAttribute("data-sort"); renderJobs(); });
     });
+    bindJobParse();
     bindJobItems();
+  }
+
+  function bindJobParse() {
+    var input = el("jobUrlInput");
+    var btn = el("jobUrlParse");
+    if (!input || !btn) return;
+    var run = function () {
+      var url = input.value.trim();
+      var status = el("jobParseStatus");
+      if (!/^https?:\/\//i.test(url)) {
+        status.innerHTML = '<div class="resume-error">请输入以 http:// 或 https:// 开头的岗位链接</div>';
+        return;
+      }
+      status.innerHTML = '<div class="resume-loading">正在抓取页面并提取岗位要求…</div>';
+      btn.disabled = true;
+      api("jobs/parse", { method: "POST", body: { url: url } }).then(function (data) {
+        btn.disabled = false;
+        status.innerHTML = "";
+        state.selectedJobId = data.data.id;
+        return loadJobs().then(function () {
+          renderJobs();
+          toast("岗位解析成功，已加入岗位库", "success");
+        });
+      }).catch(function (e) {
+        btn.disabled = false;
+        status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
+      });
+    };
+    btn.addEventListener("click", run);
+    input.addEventListener("keydown", function (e) { if (e.key === "Enter") run(); });
   }
 
   function jobDetail(job) {

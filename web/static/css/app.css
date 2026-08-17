@@ -692,6 +692,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
 .merge-skipped { margin-top: 10px; }
 .merge-skipped summary { cursor: pointer; color: var(--text-2); font-size: 13px; }
 
+/* Job URL parse */
+.job-parse-bar .panel-body { padding: 12px 14px; }
+
 /* Responsive */
 @media (max-width: 1080px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }

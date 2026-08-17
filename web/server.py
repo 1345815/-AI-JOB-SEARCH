@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from profile_merger import apply_paths, build_merge_plan
+from job_extractor import extract_job_from_url
 from resume_extractor import extract_profile_from_resume
 from resume_parser import extract_resume_text
 
@@ -1280,6 +1281,39 @@ class Handler(BaseHTTPRequestHandler):
                     save_evaluation(user["id"], ev)
                 results.append({**job, "evaluation": ev})
             self._send(200, results)
+            return
+
+        if head == "jobs" and len(parts) >= 2 and parts[1] == "parse" and method == "POST":
+            body = self._json_body()
+            url = (body.get("url") or "").strip()
+            if not url:
+                self._send(400, {"ok": False, "error": "缺少岗位链接"})
+                return
+            try:
+                parsed = extract_job_from_url(url)
+                if not parsed.get("title"):
+                    parsed["title"] = "已解析岗位"
+                job_id = add_job({
+                    "title": parsed.get("title", "已解析岗位"),
+                    "company": parsed.get("company") or "未知公司",
+                    "city": "",
+                    "posting_type": "未知",
+                    "salary": "",
+                    "deadline": "",
+                    "tags": ["URL解析"],
+                    "url": url,
+                    "description": parsed.get("description", ""),
+                    "requirements": parsed.get("requirements", []),
+                    "source": "URL解析",
+                })
+                job = get_job(job_id)
+                ev = score_job(job, json.loads(user.get("profile_json") or "{}"))
+                save_evaluation(user["id"], ev)
+                self._send(200, {"ok": True, "data": {**job, "evaluation": ev}})
+            except ValueError as exc:
+                self._send(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                self._send(502, {"ok": False, "error": "网页解析失败：" + str(exc)})
             return
 
         if head == "jobs" and method == "POST":
