@@ -53,7 +53,7 @@ def _local_extract(text):
     if name_match:
         extracted["name"] = name_match.group(1)
         confidence["name"] = "high"
-    elif first_line and len(first_line) <= 6:
+    elif first_line and len(first_line) <= 4:
         extracted["name"] = first_line
         confidence["name"] = "medium"
 
@@ -75,36 +75,60 @@ def _local_extract(text):
         confidence["github"] = "high"
 
     skills = []
-    for hint in _SKILL_HINTS:
-        if hint.lower() in text.lower() and hint not in skills:
-            skills.append(hint)
+    skill_line = re.search(r"(?:专业技能|技能|擅长|Skills)\s*[:：]?\s*(.+)", text, re.IGNORECASE)
+    if skill_line:
+        parts = re.split(r"[,，;；、/|]|\s{2,}", skill_line.group(1))
+        for part in parts:
+            p = part.strip().strip("。；，")
+            if 1 <= len(p) <= 30 and p not in skills:
+                skills.append(p)
     if skills:
         extracted["skills"] = {"strong": skills, "moderate": [], "weak": []}
         confidence["skills.strong"] = "medium"
 
     education = []
-    edu_pattern = re.compile(
-        r"([\u4e00-\u9fa5]{2,}(?:大学|学院|学校))[\s，,]*"
-        r"([^。\n]{0,60})"
-    )
-    for m in edu_pattern.finditer(text):
-        school = m.group(1)
+    for line in text.splitlines():
+        school_match = re.search(r"([\u4e00-\u9fa5]{2,}(?:大学|学院|学校))", line)
+        if not school_match:
+            continue
+        school = school_match.group(1)
         if any(school in (e.get("school") or "") for e in education):
             continue
-        education.append({"school": school, "degree": "", "period": "", "detail": m.group(2).strip()})
+        period_match = re.search(
+            r"((?:19|20)\d{2}\s*[-—/.年]+\s*(?:(?:19|20)\d{2}|至今|现在|今))",
+            line,
+        )
+        degree_match = re.search(r"(本科|硕士|博士|大专|学士)", line)
+        detail = re.sub(r"^(教育|学校|学历|院校)\s*[:：]\s*", "", line.replace(school, ""))
+        if period_match:
+            detail = detail.replace(period_match.group(1), "")
+        detail = re.sub(r"[\s\-—–|｜]+", " ", detail).strip(" :：")
+        education.append({
+            "school": school,
+            "degree": degree_match.group(1) if degree_match else "",
+            "period": period_match.group(1) if period_match else "",
+            "detail": detail[:80],
+        })
     if education:
         extracted["education"] = education
         confidence["education"] = "medium"
 
     experiences = []
     exp_pattern = re.compile(
-        r"((?:19|20)\d{2}[-—/.]\d{1,2}(?:[-—/.](?:至今|现在|今))?)[\s，,]*"
-        r"([\u4e00-\u9fa5A-Za-z0-9]{2,30})"
+        r"^\s*(.+?)\s*[|｜]\s*(.+?(?:公司|集团|科技|网络|银行|有限|事务所))"
+        r"(?:\s*[（(]([^)）]*)[)）])?\s*$"
     )
-    for m in exp_pattern.finditer(text):
-        line = text[max(0, m.start() - 40):m.end() + 60]
-        if any(k in line for k in ("公司", "实习", "工作", "任职", "就职")):
-            experiences.append({"title": m.group(2), "company": "", "period": m.group(1), "points": [line.strip()]})
+    for line in text.splitlines():
+        m = exp_pattern.match(line)
+        if m:
+            experiences.append({
+                "title": m.group(1).strip(),
+                "company": m.group(2).strip(),
+                "period": (m.group(3) or "").strip(),
+                "points": [],
+            })
+        elif re.search(r"(公司|实习|任职|就职)", line) and re.search(r"(19|20)\d{2}", line):
+            unrecognized.append(line.strip())
     if experiences:
         extracted["experiences"] = experiences
         confidence["experiences"] = "medium"
@@ -113,13 +137,15 @@ def _local_extract(text):
         s = line.strip()
         if re.search(r"证书|CET|雅思|托福", s):
             extracted.setdefault("certifications", [])
-            if s not in extracted["certifications"]:
-                extracted["certifications"].append(s)
+            cleaned = re.sub(r"^[\s\-—–|｜]*", "", s).strip()
+            if cleaned not in extracted["certifications"]:
+                extracted["certifications"].append(cleaned)
             confidence.setdefault("certifications", "medium")
         elif re.search(r"(一等奖|二等奖|三等奖|获奖|冠军|优秀)", s):
             extracted.setdefault("awards", [])
-            if s not in extracted["awards"]:
-                extracted["awards"].append(s)
+            cleaned = re.sub(r"^(获奖|奖项)\s*[:：]\s*", "", s).strip()
+            if cleaned not in extracted["awards"]:
+                extracted["awards"].append(cleaned)
             confidence.setdefault("awards", "medium")
 
     return extracted, confidence, unrecognized

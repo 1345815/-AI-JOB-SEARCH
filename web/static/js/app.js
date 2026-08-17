@@ -677,7 +677,7 @@
     html += '<h4 class="merge-title">建议填入（' + fills.length + "）</h4>";
     if (fills.length) {
       html += fills.map(function (item) {
-        return mergeCheckRow(item, true);
+        return mergeCheckRow(item, (item.confidence || "high") === "high");
       }).join("");
     } else {
       html += '<div class="muted text-sm">没有可直接填入的新字段</div>';
