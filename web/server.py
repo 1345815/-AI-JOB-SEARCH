@@ -8,6 +8,7 @@
 
 import argparse
 import base64
+import cgi
 import hashlib
 import hmac
 import json
@@ -15,12 +16,17 @@ import mimetypes
 import os
 import secrets
 import sqlite3
+import tempfile
 import threading
 import time
 import urllib.request
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from profile_merger import apply_paths, build_merge_plan
+from resume_extractor import extract_profile_from_resume
+from resume_parser import extract_resume_text
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -177,6 +183,15 @@ def init_db():
                 role TEXT,
                 content TEXT,
                 created_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS resume_import_drafts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                merge_plan_json TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT DEFAULT (datetime('now', 'localtime')),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
             """
@@ -1039,6 +1054,135 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    def _multipart_file(self):
+        content_type = self.headers.get("Content-Type", "")
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > 10 * 1024 * 1024 + 1024:
+            return None, 413, "文件超过 10MB 上限"
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={
+                "REQUEST_METHOD": "POST",
+                "CONTENT_TYPE": content_type,
+            },
+        )
+        field = form["file"] if "file" in form else None
+        if isinstance(field, list):
+            field = field[0] if field else None
+        if field is None or not getattr(field, "filename", None):
+            return None, 400, "缺少 file 字段"
+        return field, 200, ""
+
+    def _api_resume_import(self, method, parts, user):
+        current = json.loads(user.get("profile_json") or "{}")
+
+        if method == "GET" and (not parts or parts[0] == "draft"):
+            with _DB_LOCK:
+                conn = db()
+                row = conn.execute(
+                    "SELECT * FROM resume_import_drafts WHERE user_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
+                    (user["id"],),
+                ).fetchone()
+                conn.close()
+            if not row:
+                self._send(200, {"ok": True, "data": None})
+                return
+            self._send(200, {"ok": True, "data": json.loads(row["merge_plan_json"])})
+            return
+
+        if method == "POST" and parts and parts[0] == "apply":
+            body = self._json_body()
+            paths = body.get("accepted_field_paths", [])
+            if not isinstance(paths, list):
+                self._send(400, {"ok": False, "error": "accepted_field_paths 必须是数组"})
+                return
+            with _DB_LOCK:
+                conn = db()
+                row = conn.execute(
+                    "SELECT * FROM resume_import_drafts WHERE user_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
+                    (user["id"],),
+                ).fetchone()
+                if not row:
+                    conn.close()
+                    self._send(404, {"ok": False, "error": "没有待确认的导入草稿"})
+                    return
+                plan = json.loads(row["merge_plan_json"])
+                new_profile, applied = apply_paths(current, plan, paths)
+                conn.execute(
+                    "UPDATE users SET profile_json=?, updated_at=datetime('now', 'localtime') WHERE id=?",
+                    (json.dumps(new_profile, ensure_ascii=False), user["id"]),
+                )
+                conn.execute(
+                    "UPDATE resume_import_drafts SET status='applied', updated_at=datetime('now', 'localtime') WHERE id=?",
+                    (row["id"],),
+                )
+                conn.commit()
+                conn.close()
+            self._send(200, {"ok": True, "data": {"profile": new_profile, "applied": applied}})
+            return
+
+        if method == "POST" and (not parts or parts[0] == "upload"):
+            field, code, msg = self._multipart_file()
+            if code != 200:
+                self._send(code, {"ok": False, "error": msg})
+                return
+            filename = getattr(field, "filename", "") or ""
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in (".pdf", ".docx", ".txt", ".md"):
+                self._send(400, {"ok": False, "error": "不支持的文件类型，仅支持 PDF/DOCX/TXT/MD"})
+                return
+            tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False, prefix="resume_")
+            try:
+                data = field.file.read(10 * 1024 * 1024 + 1)
+                if len(data) > 10 * 1024 * 1024:
+                    self._send(413, {"ok": False, "error": "文件超过 10MB 上限"})
+                    return
+                tmp.write(data)
+                tmp.close()
+                parsed = extract_resume_text(tmp.name)
+                if parsed.get("warning"):
+                    self._send(400, {"ok": False, "error": parsed["warning"]})
+                    return
+                result = extract_profile_from_resume(parsed["text"], user["id"])
+                plan = build_merge_plan(current, result["extracted"], result["confidence"])
+                sources = result.get("source_text", {})
+                for group in ("fills", "updates"):
+                    for item in plan.get(group, []):
+                        path = item["field_path"]
+                        if path in sources:
+                            item["source_text"] = sources[path]
+                plan["unrecognized"] = result.get("unrecognized", [])
+                with _DB_LOCK:
+                    conn = db()
+                    conn.execute(
+                        "UPDATE resume_import_drafts SET status='discarded' WHERE user_id=? AND status='pending'",
+                        (user["id"],),
+                    )
+                    conn.execute(
+                        "INSERT INTO resume_import_drafts (user_id, merge_plan_json, status) VALUES (?,?, 'pending')",
+                        (user["id"], json.dumps(plan, ensure_ascii=False)),
+                    )
+                    conn.commit()
+                    conn.close()
+                self._send(200, {"ok": True, "data": plan})
+            except ValueError as exc:
+                self._send(400, {"ok": False, "error": str(exc)})
+            except RuntimeError as exc:
+                self._send(502, {"ok": False, "error": "简历解析失败：" + str(exc)})
+            finally:
+                try:
+                    tmp.close()
+                except Exception:
+                    pass
+                try:
+                    os.unlink(tmp.name)
+                except Exception:
+                    pass
+            return
+
+        self._send(404, {"ok": False, "error": "not found"})
+
     def _session_token(self):
         return _cookie_value(self.headers.get("Cookie"), SESSION_COOKIE)
 
@@ -1099,6 +1243,9 @@ class Handler(BaseHTTPRequestHandler):
             user = get_user_by_token(self._session_token())
             self._send(200, json.loads(user.get("profile_json") or "{}"))
             return
+
+        if head == "profile" and len(parts) >= 2 and parts[1] == "resume-import":
+            return self._api_resume_import(method, parts[2:], user)
 
         if head == "settings" and method == "GET":
             settings = load_settings()

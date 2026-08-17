@@ -588,6 +588,13 @@
       '<div class="content-inner">' +
       '<div class="page-head"><div><h1>个人资料</h1><p>填写你的真实经历与目标，岗位评分、简历和求职信会据此生成。资料仅存储在你的账号下。</p></div>' +
       '<div class="page-actions"><button class="btn btn-primary" id="saveProfile">保存档案</button></div></div>' +
+      '<div class="panel mb-14"><div class="panel-head"><strong>导入旧简历，自动填写</strong><span class="sub">支持 PDF / DOCX / TXT / MD，≤10MB</span></div>' +
+      '<div class="panel-body">' +
+      '<div class="upload-zone" id="uploadZone"><input type="file" id="resumeFile" accept=".pdf,.docx,.txt,.md" hidden>' +
+      '<strong>点击选择或拖拽简历文件</strong><span class="muted">仅支持文字版简历，扫描件无法自动识别</span></div>' +
+      '<div id="resumeImportStatus" class="mt-8"></div>' +
+      "</div></div>" +
+      '<div id="resumeMergePanel"></div>' +
       '<div class="panel"><div class="panel-body profile-editor">' +
       '<div class="form-grid">' +
       field("姓名", "profileName", p.name) +
@@ -605,6 +612,163 @@
       "</div></div>" +
       "</div>";
     el("saveProfile").addEventListener("click", saveProfile);
+    bindUploadZone();
+    loadResumeDraft();
+  }
+
+  function bindUploadZone() {
+    var zone = el("uploadZone");
+    var input = el("resumeFile");
+    if (!zone || !input) return;
+    zone.addEventListener("click", function () { input.click(); });
+    input.addEventListener("change", function () {
+      if (input.files && input.files[0]) uploadResume(input.files[0]);
+    });
+    ["dragover", "drop"].forEach(function (name) {
+      zone.addEventListener(name, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (name === "drop" && e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+          uploadResume(e.dataTransfer.files[0]);
+        }
+      });
+    });
+  }
+
+  async function uploadResume(file) {
+    var status = el("resumeImportStatus");
+    var name = (file.name || "").toLowerCase();
+    var allowed = [".pdf", ".docx", ".txt", ".md"];
+    if (!allowed.some(function (e) { return name.endsWith(e); })) {
+      status.innerHTML = '<div class="resume-error">仅支持 PDF / DOCX / TXT / MD 文件</div>';
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      status.innerHTML = '<div class="resume-error">文件超过 10MB 上限</div>';
+      return;
+    }
+    var form = new FormData();
+    form.append("file", file);
+    status.innerHTML = '<div class="resume-loading">正在解析并识别简历…</div>';
+    try {
+      var resp = await fetch("/api/profile/resume-import", {
+        method: "POST",
+        credentials: "include",
+        body: form
+      });
+      var data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || data.message || "导入失败");
+      status.innerHTML = "";
+      renderMergePlan(data.data);
+      toast("简历解析完成，请确认要填入的字段", "success");
+    } catch (e) {
+      status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
+    }
+  }
+
+  function renderMergePlan(plan) {
+    if (!plan) return;
+    var fills = plan.fills || [];
+    var updates = plan.updates || [];
+    var skipped = plan.skipped || [];
+    var unknown = plan.unrecognized || [];
+    var html =
+      '<div class="panel mb-14"><div class="panel-head"><strong>确认填充</strong><span class="sub">只应用你勾选的字段，已有信息不会被自动覆盖</span></div><div class="panel-body">';
+    html += '<h4 class="merge-title">建议填入（' + fills.length + "）</h4>";
+    if (fills.length) {
+      html += fills.map(function (item) {
+        return mergeCheckRow(item, true);
+      }).join("");
+    } else {
+      html += '<div class="muted text-sm">没有可直接填入的新字段</div>';
+    }
+    html += '<h4 class="merge-title mt-14">存在冲突（' + updates.length + "）</h4>";
+    if (updates.length) {
+      html += updates.map(function (item) {
+        return mergeCheckRow(item, false);
+      }).join("");
+    } else {
+      html += '<div class="muted text-sm">没有冲突字段</div>';
+    }
+    html += '<details class="merge-skipped mt-14"><summary>已跳过（' + skipped.length + "）</summary>";
+    html += skipped.map(function (item) {
+      return '<div class="text-sm muted">' + esc(item.field_path) + "：" + (item.new_value === null || item.new_value === "" ? "未识别到内容" : "置信度低") + "</div>";
+    }).join("");
+    html += "</details>";
+    if (unknown.length) {
+      html += '<details class="merge-skipped mt-8"><summary>以下内容未能自动归类（' + unknown.length + "）</summary>";
+      html += unknown.map(function (s) { return '<div class="text-sm muted">· ' + esc(s) + "</div>"; }).join("");
+      html += "</details>";
+    }
+    html +=
+      '<div class="flex mt-14" style="justify-content:flex-end;gap:8px">' +
+      '<button class="btn" id="discardMerge">放弃</button>' +
+      '<button class="btn btn-primary" id="applyMerge">确认填入 0 项</button>' +
+      "</div></div></div>";
+    el("resumeMergePanel").innerHTML = html;
+    el("applyMerge").addEventListener("click", applyMerge);
+    el("discardMerge").addEventListener("click", function () {
+      if (confirm("确定放弃本次导入？档案不会被修改。")) {
+        api("profile/resume-import/apply", { method: "POST", body: { accepted_field_paths: [] } }).then(function () {
+          el("resumeMergePanel").innerHTML = "";
+          toast("已放弃导入", "success");
+        }).catch(function () {
+          el("resumeMergePanel").innerHTML = "";
+        });
+      }
+    });
+    document.querySelectorAll(".merge-check").forEach(function (cb) {
+      cb.addEventListener("change", updateMergeCount);
+    });
+    updateMergeCount();
+  }
+
+  function mergeCheckRow(item, checked) {
+    var label = item.field_path;
+    var val = item.new_value;
+    var valText = typeof val === "object" ? JSON.stringify(val, null, 1) : String(val == null ? "" : val);
+    var current = item.current_value;
+    var currentText = typeof current === "object" ? JSON.stringify(current, null, 1) : String(current == null ? "" : current);
+    var extra = "";
+    if (item.current_value !== undefined && item.current_value !== null && String(item.current_value) !== "") {
+      extra = '<div class="merge-current">当前值：' + esc(currentText) + "</div>";
+    }
+    return (
+      '<label class="merge-row">' +
+      '<input type="checkbox" class="merge-check" data-path="' + esc(item.field_path) + '"' + (checked ? " checked" : "") + ">" +
+      '<div class="merge-body"><div class="merge-path">' + esc(label) + " <span class=\"tag\">" + esc(item.confidence || "high") + "</span></div>" +
+      '<div class="merge-value">简历值：' + esc(valText) + "</div>" + extra +
+      (item.source_text ? '<div class="merge-source">原文：' + esc(item.source_text) + "</div>" : "") +
+      "</div></label>"
+    );
+  }
+
+  function updateMergeCount() {
+    var count = document.querySelectorAll(".merge-check:checked").length;
+    var btn = el("applyMerge");
+    if (btn) btn.textContent = "确认填入 " + count + " 项";
+  }
+
+  async function applyMerge() {
+    var paths = Array.from(document.querySelectorAll(".merge-check:checked")).map(function (c) {
+      return c.getAttribute("data-path");
+    });
+    try {
+      var data = await api("profile/resume-import/apply", { method: "POST", body: { accepted_field_paths: paths } });
+      state.profile = data.data.profile;
+      state.user.profile = state.profile;
+      await loadJobs();
+      updateProfileBanner();
+      toast("已填入 " + data.data.applied + " 项，档案已更新", "success");
+      renderProfile();
+    } catch (e) { toast("应用失败：" + e.message, "error"); }
+  }
+
+  async function loadResumeDraft() {
+    try {
+      var data = await api("profile/resume-import/draft");
+      if (data && data.data) renderMergePlan(data.data);
+    } catch (e) {}
   }
 
   function field(label, id, value, note) {
