@@ -6,7 +6,7 @@ services:
     ports:
       - "${PORT:-8000}:8000"
     environment:
-      - DB_PATH=/app/web/data/careerpilot.db
+      - DB_PATH=/app/data/careerpilot.db
       - SESSION_MAX_AGE_DAYS=${SESSION_MAX_AGE_DAYS:-7}
       - HOST=0.0.0.0
       - PORT=8000
@@ -15,5 +15,5 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-}
     volumes:
-      - ./data:/app/web/data
+      - ./data:/app/data
     restart: unless-stopped
