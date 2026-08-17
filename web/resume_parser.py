@@ -57,7 +57,13 @@ def extract_resume_text(file_path):
         except ImportError:
             raise ValueError("缺少 python-docx 依赖，无法解析 DOCX")
         document = docx.Document(str(path))
-        text = "\n".join(p.text for p in document.paragraphs)
+        parts = [p.text for p in document.paragraphs]
+        for table in document.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                if any(cells):
+                    parts.append(" | ".join(cells))
+        text = "\n".join(parts)
         pages = None
     else:
         raise ValueError("不支持的文件类型")

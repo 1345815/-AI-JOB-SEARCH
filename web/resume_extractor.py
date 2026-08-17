@@ -69,19 +69,37 @@ def _local_extract(text):
     if city:
         extracted["city"] = city.group(1)
         confidence["city"] = "high"
+    elif re.search(r"(北京|上海|深圳|广州|杭州|郑州|成都|武汉|南京|苏州|西安|合肥|长沙|厦门|珠海)", text[:300]):
+        extracted["city"] = re.search(r"(北京|上海|深圳|广州|杭州|郑州|成都|武汉|南京|苏州|西安|合肥|长沙|厦门|珠海)", text[:300]).group(1)
+        confidence["city"] = "medium"
     github = re.search(r"https?://(?:www\.)?github\.com/[\w-]+", text)
     if github:
         extracted["github"] = github.group(0)
         confidence["github"] = "high"
 
+    status_match = re.search(r"求职方向\s*[:：]\s*(.+)", text)
+    if status_match:
+        extracted["status"] = status_match.group(1).strip()
+        confidence["status"] = "high"
+
     skills = []
-    skill_line = re.search(r"(?:专业技能|技能|擅长|Skills)\s*[:：]?\s*(.+)", text, re.IGNORECASE)
-    if skill_line:
-        parts = re.split(r"[,，;；、/|]|\s{2,}", skill_line.group(1))
-        for part in parts:
-            p = part.strip().strip("。；，")
-            if 1 <= len(p) <= 30 and p not in skills:
-                skills.append(p)
+    for line in text.splitlines():
+        s = line.strip()
+        skill_line = re.match(r"(?:专业技能|技能|擅长|Skills)\s*[:：]\s*(.+)", s, re.IGNORECASE)
+        if skill_line:
+            parts = re.split(r"[,，;；、/|]|\s{2,}", skill_line.group(1))
+            for part in parts:
+                p = part.strip().strip("。；，")
+                if 1 <= len(p) <= 30 and p not in skills:
+                    skills.append(p)
+        elif "|" in s:
+            left, right = s.split("|", 1)
+            if re.search(r"(?:19|20)\d{2}", right):
+                continue
+            pool = [left.strip()] + [p.strip() for p in re.split(r"[·•,，;；、/]", right) if p.strip()]
+            for p in pool:
+                if 1 <= len(p) <= 30 and not re.match(r"^\d", p) and p not in skills:
+                    skills.append(p)
     if skills:
         extracted["skills"] = {"strong": skills, "moderate": [], "weak": []}
         confidence["skills.strong"] = "medium"
@@ -114,24 +132,35 @@ def _local_extract(text):
         confidence["education"] = "medium"
 
     experiences = []
-    exp_pattern = re.compile(
-        r"^\s*(.+?)\s*[|｜]\s*(.+?(?:公司|集团|科技|网络|银行|有限|事务所))"
-        r"(?:\s*[（(]([^)）]*)[)）])?\s*$"
-    )
+    exp_pattern = re.compile(r"^\s*(.+?)\s*·\s*(.+?)\s*[|｜]\s*((?:19|20)\d{2}.*)$")
     for line in text.splitlines():
-        m = exp_pattern.match(line)
+        m = exp_pattern.match(line.strip())
         if m:
             experiences.append({
-                "title": m.group(1).strip(),
-                "company": m.group(2).strip(),
-                "period": (m.group(3) or "").strip(),
+                "title": m.group(2).strip(),
+                "company": m.group(1).strip(),
+                "period": m.group(3).strip(),
                 "points": [],
             })
-        elif re.search(r"(公司|实习|任职|就职)", line) and re.search(r"(19|20)\d{2}", line):
-            unrecognized.append(line.strip())
     if experiences:
         extracted["experiences"] = experiences
         confidence["experiences"] = "medium"
+
+    projects = []
+    for line in text.splitlines():
+        s = line.strip()
+        if "独立开发" not in s or "·" not in s:
+            continue
+        title_part = s.split("·", 1)[1].strip()
+        pm = re.match(r"(.+?)\s*[|｜]\s*((?:19|20)\d{2}.*)$", title_part)
+        title = pm.group(1).strip() if pm else title_part
+        period = pm.group(2).strip() if pm else ""
+        if any(p.get("title") == title for p in projects):
+            continue
+        projects.append({"title": title, "period": period, "points": []})
+    if projects:
+        extracted["projects"] = projects
+        confidence["projects"] = "medium"
 
     for line in text.splitlines():
         s = line.strip()
