@@ -25,7 +25,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from profile_merger import apply_paths, build_merge_plan
-from job_extractor import extract_job_from_url
+from job_extractor import extract_job_from_url, search_jobs
+from form_extractor import extract_form
+from form_filler import build_fill_plan
 from resume_extractor import extract_profile_from_resume
 from resume_parser import extract_resume_text
 
@@ -57,11 +59,12 @@ def load_settings():
         "api_key": os.environ.get("LLM_API_KEY", ""),
         "model": os.environ.get("LLM_MODEL", ""),
         "enabled": os.environ.get("LLM_ENABLED", "") == "1",
+        "search": {"provider": "custom", "api_key": "", "max_results": 20},
     }
     if SETTINGS_FILE.exists():
         try:
             stored = json.loads(_utf8(SETTINGS_FILE))
-            for key in ("base_url", "api_key", "model", "enabled"):
+            for key in ("provider", "base_url", "api_key", "model", "enabled", "search"):
                 if key in stored:
                     settings[key] = stored[key]
         except Exception:
@@ -79,6 +82,8 @@ def load_seed_jobs():
 
 def db():
     DB_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if DB_FILE.exists() and not os.access(DB_FILE, os.W_OK):
+        raise RuntimeError(f"数据库文件不可写：{DB_FILE}")
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -251,9 +256,9 @@ def verify_password(password, stored):
         return False
 
 
-def create_session(user_id):
+def create_session(user_id, max_age=None):
     token = secrets.token_urlsafe(32)
-    expires = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + SESSION_MAX_AGE_DAYS * 86400))
+    expires = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + (max_age or SESSION_MAX_AGE_DAYS * 86400)))
     with _DB_LOCK:
         conn = db()
         conn.execute("DELETE FROM sessions WHERE expires_at < datetime('now', 'localtime')")
@@ -284,6 +289,15 @@ def get_user_by_token(token):
         ).fetchone()
         conn.close()
     return dict(row) if row else None
+
+def touch_session(token):
+    if not token: return None
+    with _DB_LOCK:
+        conn=db(); row=conn.execute("SELECT expires_at FROM sessions WHERE token=?",(token,)).fetchone()
+        if row and time.mktime(time.strptime(row["expires_at"],"%Y-%m-%d %H:%M:%S"))-time.time()<86400:
+            conn.execute("UPDATE sessions SET expires_at=? WHERE token=?",(time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(time.time()+SESSION_MAX_AGE_DAYS*86400)),token)); conn.commit()
+        row=conn.execute("SELECT expires_at FROM sessions WHERE token=?",(token,)).fetchone(); conn.close()
+    return row["expires_at"] if row else None
 
 
 def user_public(user):
@@ -1188,12 +1202,14 @@ class Handler(BaseHTTPRequestHandler):
         return _cookie_value(self.headers.get("Cookie"), SESSION_COOKIE)
 
     def _current_user(self):
-        return get_user_by_token(self._session_token())
+        token=self._session_token(); user=get_user_by_token(token)
+        if user: self._session_expires_at=touch_session(token)
+        return user
 
-    def _session_cookie(self, token):
+    def _session_cookie(self, token, remember=True):
+        prefix=self.headers.get("X-Forwarded-Prefix", "/").rstrip("/") or "/"; same_site=os.environ.get("CAREERPILOT_COOKIE_SAMESITE","Lax"); secure=same_site.lower()=="none" or self.headers.get("X-Forwarded-Proto","").lower()=="https"
         return (
-            f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; "
-            f"Max-Age={SESSION_MAX_AGE_DAYS * 86400}"
+            f"{SESSION_COOKIE}={token}; Path={prefix}; HttpOnly; SameSite={same_site}{'; Secure' if secure else ''}{'; Max-Age=2592000' if remember else ''}"
         )
 
     def _clear_cookie(self):
@@ -1248,6 +1264,13 @@ class Handler(BaseHTTPRequestHandler):
         if head == "profile" and len(parts) >= 2 and parts[1] == "resume-import":
             return self._api_resume_import(method, parts[2:], user)
 
+        if head == "forms" and len(parts)>1 and parts[1]=="extract" and method=="POST":
+            body=self._json_body(); self._send(200,{"ok":True,"data":extract_form(body.get("html",""),body.get("source_url", ""))}); return
+        if head == "forms" and len(parts)>1 and parts[1]=="templates" and method=="GET":
+            self._send(200,{"ok":True,"data":json.loads(_utf8(ROOT / "form_field_templates.json"))}); return
+        if head == "forms" and len(parts)>1 and parts[1]=="fill-plan" and method=="POST":
+            body=self._json_body(); self._send(200,{"ok":True,"data":build_fill_plan(body.get("form_id",""),body.get("fields",[]),body.get("profile") or json.loads(user.get("profile_json") or "{}"))}); return
+
         if head == "settings" and method == "GET":
             settings = load_settings()
             settings.pop("api_key", None)
@@ -1271,7 +1294,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, public)
             return
 
-        if head == "jobs" and method == "GET":
+        if head == "jobs" and len(parts) == 1 and method == "GET":
             jobs = list_jobs()
             results = []
             for job in jobs:
@@ -1282,6 +1305,17 @@ class Handler(BaseHTTPRequestHandler):
                 results.append({**job, "evaluation": ev})
             self._send(200, results)
             return
+
+        if head=="jobs" and len(parts)>1 and parts[1]=="search" and method=="GET":
+            s=load_settings(); self._send(200,{"ok":True,"data":{"enabled":bool(s.get("enabled") and s.get("api_key") and s.get("base_url")),"provider":s.get("provider","custom"),"model":s.get("model",""),"has_key":bool(s.get("api_key"))}}); return
+        if head=="jobs" and len(parts)>1 and parts[1]=="search" and method=="POST":
+            query=self._json_body(); s=load_settings(); enabled=bool(s.get("enabled") and s.get("api_key") and s.get("base_url")); results=search_jobs(query,s)
+            if not enabled: self._send(200,{"ok":True,"data":[],"local_results":results,"mode":"local","hint":"请在设置中开启 AI 模式以使用联网搜索"}); return
+            profile=json.loads(user.get("profile_json") or "{}"); output=[]
+            for item in results:
+                if item.get("source")=="local": continue
+                job=get_job(add_job(item)); ev=score_job(job,profile); save_evaluation(user["id"],ev); output.append({**job,"evaluation":ev})
+            self._send(200,{"ok":True,"data":output,"mode":"llm","hint":"以下为 LLM 建议，投递前请人工核实链接。"}); return
 
         if head == "jobs" and len(parts) >= 2 and parts[1] == "parse" and method == "POST":
             body = self._json_body()
@@ -1569,9 +1603,9 @@ class Handler(BaseHTTPRequestHandler):
                 conn.commit()
                 user_id = cur.lastrowid
                 conn.close()
-            token = create_session(user_id)
+            remember=bool(body.get("remember",True)); token = create_session(user_id,2592000 if remember else None)
             user = user_public(get_user_by_token(token))
-            self._send(200, {"ok": True, "user": user}, set_cookie=self._session_cookie(token))
+            self._send(200, {"ok": True, "user": user}, set_cookie=self._session_cookie(token,remember))
             return
 
         if action == "login" and method == "POST":
@@ -1585,9 +1619,9 @@ class Handler(BaseHTTPRequestHandler):
             if not row or not row["password_hash"] or not verify_password(password, row["password_hash"]):
                 self._send(400, {"ok": False, "error": "用户名或密码错误"})
                 return
-            token = create_session(row["id"])
+            remember=bool(body.get("remember",True)); token = create_session(row["id"],2592000 if remember else None)
             user = user_public(get_user_by_token(token))
-            self._send(200, {"ok": True, "user": user}, set_cookie=self._session_cookie(token))
+            self._send(200, {"ok": True, "user": user}, set_cookie=self._session_cookie(token,remember))
             return
 
         if action == "logout" and method == "POST":
@@ -1599,8 +1633,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if action == "me" and method == "GET":
             user = self._current_user()
-            self._send(200, {"ok": bool(user), "user": user_public(user) if user else None})
+            self._send(200 if user else 401, {"ok": bool(user), "user": user_public(user) if user else None, "server_time":time.strftime("%Y-%m-%d %H:%M:%S"), "session_expires_at":getattr(self,"_session_expires_at",None)})
             return
+
+        if action == "logout-all" and method == "POST":
+            user=self._current_user()
+            if not user: self._send(401,{"ok":False,"error":"未登录"}); return
+            with _DB_LOCK:
+                conn=db(); conn.execute("DELETE FROM sessions WHERE user_id=?",(user["id"],)); conn.commit(); conn.close()
+            self._send(200,{"ok":True},set_cookie=self._clear_cookie()); return
 
         if action == "guest" and method == "POST":
             guest_id = create_guest_user()

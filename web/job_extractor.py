@@ -4,6 +4,9 @@ import re
 import socket
 import urllib.parse
 import urllib.request
+import hashlib
+import json
+from pathlib import Path
 from html.parser import HTMLParser
 
 from llm_client import llm_available, request_json
@@ -139,3 +142,19 @@ def extract_job_from_url(url):
             pass
 
     return _local_extract(text)
+
+def search_jobs(query: dict, settings: dict) -> list[dict]:
+    """Local matches plus explicitly marked LLM suggestions, never fake live results."""
+    terms=(query.get("keywords") or "").lower().split(); city=(query.get("city") or "").strip(); limit=min(max(int(query.get("limit",20)),1),50)
+    local=[]
+    for job in json.loads((Path(__file__).with_name("data") / "jobs_seed.json").read_text(encoding="utf-8")):
+        text=" ".join([job.get("title",""),job.get("company",""),job.get("description","")," ".join(job.get("tags",[]))]).lower()
+        if (not terms or all(t in text for t in terms)) and (not city or city in job.get("city","")): local.append({**job,"source":"local"})
+    if not llm_available(): return local[:limit]
+    try:
+        raw=request_json("你是行业 HR 助手，只输出 JSON。", "返回 {jobs:[{title,company,city,posting_type,work_type,salary,description,requirements,url,tags}]}。只能给出合理候选，不能声称实时抓取。查询："+json.dumps(query,ensure_ascii=False))
+        suggested=[]
+        for job in raw.get("jobs",[])[:limit]:
+            if job.get("title") and job.get("company"): suggested.append({**job,"id":"job-"+hashlib.sha256((job.get("url") or job["title"]+job["company"]).encode()).hexdigest()[:16],"source":"llm_suggested"})
+        return (local+suggested)[:limit]
+    except Exception: return local[:limit]

@@ -197,8 +197,8 @@
     el("profileBanner").classList.toggle("hide", !empty);
   }
 
-  async function login(username, password) {
-    var data = await api("auth/login", { method: "POST", body: { username: username, password: password } });
+  async function login(username, password, remember) {
+    var data = await api("auth/login", { method: "POST", body: { username: username, password: password, remember: remember } });
     setUser(data.user);
     toast("登录成功", "success");
     await bootApp();
@@ -349,6 +349,7 @@
       '<div class="content-inner">' +
       '<div class="page-head"><div><h1>岗位搜索</h1><p>基于你的档案，按技能、经历、文化与职业方向五维评分。</p></div></div>' +
       '<div class="panel job-parse-bar mb-14"><div class="panel-body">' +
+      '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><button class="btn btn-primary" id="btnOnlineSearch">联网搜索（AI 模式）</button><span class="tag" id="aiModeBadge">检测中…</span></div>' +
       '<div class="flex" style="gap:8px;flex-wrap:wrap">' +
       '<input id="jobUrlInput" type="url" style="flex:1;min-width:280px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="粘贴岗位网址，自动提取岗位与要求">' +
       '<button class="btn btn-primary" id="jobUrlParse">快速解析</button>' +
@@ -369,7 +370,26 @@
       btn.addEventListener("click", function () { state.jobSort = btn.getAttribute("data-sort"); renderJobs(); });
     });
     bindJobParse();
+    bindOnlineSearch();
     bindJobItems();
+  }
+
+  function bindOnlineSearch() {
+    var btn = el("btnOnlineSearch"), badge = el("aiModeBadge");
+    if (!btn) return;
+    api("jobs/search").then(function (res) {
+      var data = res.data; btn.disabled = !data.enabled;
+      badge.textContent = data.enabled ? "AI 模式已开启 · " + data.provider : "AI 模式未开启 · 联网搜索不可用";
+      btn.title = data.enabled ? "" : "请在设置中开启 AI 模式并配置 API key";
+    });
+    btn.addEventListener("click", function () {
+      var keywords = prompt("输入岗位关键词", state.jobFilter || "AI 游戏策划");
+      if (!keywords) return;
+      btn.disabled = true;
+      api("jobs/search", { method:"POST", body:{keywords:keywords, limit:20} }).then(function (data) {
+        return loadJobs().then(function () { renderJobs(); toast(data.hint || "岗位搜索完成", "success"); });
+      }).catch(function (e) { toast(e.message, "error"); }).finally(function () { btn.disabled = false; });
+    });
   }
 
   function bindJobParse() {
@@ -652,6 +672,17 @@
     el("saveProfile").addEventListener("click", saveProfile);
     bindUploadZone();
     loadResumeDraft();
+    var formPanel = document.createElement("div");
+    formPanel.className = "panel profile-section";
+    formPanel.innerHTML = '<div class="panel-head"><strong>招聘网站助手</strong><span class="sub">粘贴招聘表单 HTML，识别字段并生成填写建议</span></div><div class="panel-body"><label class="field"><span>表单 HTML</span><textarea id="formHtml" placeholder="粘贴招聘官网表单 HTML"></textarea></label><button class="btn btn-primary mt-8" id="extractForm">识别字段</button><div id="formResult" class="mt-8"></div></div>';
+    el("content").querySelector(".content-inner").appendChild(formPanel);
+    el("extractForm").addEventListener("click", function () {
+      api("forms/extract", {method:"POST", body:{html:el("formHtml").value}}).then(function (form) {
+        return api("forms/fill-plan", {method:"POST", body:{form_id:form.data.form_id, fields:form.data.fields}});
+      }).then(function (plan) {
+        el("formResult").innerHTML = plan.data.mappings.map(function (m) { return '<div class="merge-row"><div class="merge-body"><strong>' + esc(m.label) + '</strong><div class="merge-value">' + esc(m.value == null ? "需手动确认" : m.value) + '</div></div></div>'; }).join("");
+      }).catch(function (e) { toast(e.message, "error"); });
+    });
   }
 
   function bindUploadZone() {
@@ -997,7 +1028,7 @@
     });
     el("loginForm").addEventListener("submit", function (e) {
       e.preventDefault();
-      login(el("loginUsername").value, el("loginPassword").value).catch(function (err) { toast(err.message, "error"); });
+      login(el("loginUsername").value, el("loginPassword").value, el("rememberMe").checked).catch(function (err) { toast(err.message, "error"); });
     });
     el("registerForm").addEventListener("submit", function (e) {
       e.preventDefault();
