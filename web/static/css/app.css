@@ -434,6 +434,12 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
 .profile-section + .profile-section { margin-top: 14px; }
 .profile-editor { display: flex; flex-direction: column; gap: 12px; }
 .profile-editor textarea { min-height: 120px; }
+.onboarding { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+.onboarding-step { display:flex; gap:9px; align-items:flex-start; padding:12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-2); text-align:left; color:var(--text); }
+.onboarding-step:hover { border-color:var(--accent); background:var(--accent-soft); }.onboarding-step b { display:grid; place-items:center; min-width:22px; height:22px; border-radius:50%; background:var(--accent); color:#fff; font-size:12px; }.onboarding-step strong,.onboarding-step small { display:block; }.onboarding-step strong{font-size:13px}.onboarding-step small{color:var(--text-3);font-size:11.5px;margin-top:2px}
+.resume-privacy{font-size:12px;color:var(--text-2);background:var(--warn-soft);border:1px solid #eed9b5;padding:9px 11px;border-radius:var(--radius-sm)}
+.job-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.job-filters select{min-width:0;height:34px;border:1px solid var(--border-strong);border-radius:6px;background:var(--surface);padding:0 8px;color:var(--text)}
+.card-reminder{color:var(--warn)!important;font-weight:600}
 
 /* Chat */
 .chat-panel {
@@ -720,6 +726,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
   .board-col { min-height: 0; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid { grid-template-columns: 1fr; }
+  .onboarding { grid-template-columns:1fr 1fr; }
+  .job-filters{grid-template-columns:1fr;}
   .user-menu-btn #userName { display: none; }
 }
 
@@ -734,4 +742,5 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
   .auth-card { padding: 20px; }
   .auth-brand h1 { font-size: 21px; }
   .profile-banner { flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 12px; }
+  .onboarding { grid-template-columns:1fr; }
 }

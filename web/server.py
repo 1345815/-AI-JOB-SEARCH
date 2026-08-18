@@ -162,6 +162,9 @@ def init_db():
                 created_at TEXT DEFAULT '',
                 updated_at TEXT DEFAULT '',
                 notes TEXT DEFAULT '',
+                contact TEXT DEFAULT '',
+                follow_up_at TEXT DEFAULT '',
+                attachment_name TEXT DEFAULT '',
                 UNIQUE(user_id, job_id),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
@@ -202,6 +205,16 @@ def init_db():
             );
             """
         )
+        conn.commit()
+        # SQLite migrations for installations created before application follow-up fields.
+        app_columns = {row["name"] for row in cur.execute("PRAGMA table_info(applications)").fetchall()}
+        for name, definition in (
+            ("contact", "TEXT DEFAULT ''"),
+            ("follow_up_at", "TEXT DEFAULT ''"),
+            ("attachment_name", "TEXT DEFAULT ''"),
+        ):
+            if name not in app_columns:
+                cur.execute("ALTER TABLE applications ADD COLUMN " + name + " " + definition)
         conn.commit()
         cur.execute("SELECT COUNT(*) AS n FROM jobs")
         if cur.fetchone()["n"] == 0:
@@ -1463,10 +1476,11 @@ class Handler(BaseHTTPRequestHandler):
                 conn = db()
                 conn.execute(
                     """INSERT INTO applications
-                       (user_id, job_id, company, title, city, stage, source, url, deadline, salary, created_at, updated_at, notes)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       (user_id, job_id, company, title, city, stage, source, url, deadline, salary, created_at, updated_at, notes, contact, follow_up_at, attachment_name)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                        ON CONFLICT(user_id, job_id) DO UPDATE SET
-                       stage=excluded.stage, updated_at=excluded.updated_at, notes=excluded.notes""",
+                       stage=excluded.stage, updated_at=excluded.updated_at, notes=excluded.notes,
+                       contact=excluded.contact, follow_up_at=excluded.follow_up_at, attachment_name=excluded.attachment_name""",
                     (
                         user["id"],
                         job_id,
@@ -1481,6 +1495,9 @@ class Handler(BaseHTTPRequestHandler):
                         now,
                         now,
                         body.get("notes", ""),
+                        body.get("contact", ""),
+                        body.get("follow_up_at", ""),
+                        body.get("attachment_name", ""),
                     ),
                 )
                 conn.commit()
@@ -1506,12 +1523,15 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._json_body()
                 stage = body.get("stage", row["stage"])
                 notes = body.get("notes", row["notes"])
+                contact = body.get("contact", row["contact"])
+                follow_up_at = body.get("follow_up_at", row["follow_up_at"])
+                attachment_name = body.get("attachment_name", row["attachment_name"])
                 conn.execute(
-                    "UPDATE applications SET stage=?, notes=?, updated_at=? WHERE id=?",
-                    (stage, notes, time.strftime("%Y-%m-%d %H:%M"), parts[1]),
+                    "UPDATE applications SET stage=?, notes=?, contact=?, follow_up_at=?, attachment_name=?, updated_at=? WHERE id=? AND user_id=?",
+                    (stage, notes, contact, follow_up_at, attachment_name, time.strftime("%Y-%m-%d %H:%M"), parts[1], user["id"]),
                 )
                 conn.commit()
-                row = conn.execute("SELECT * FROM applications WHERE id=?", (parts[1],)).fetchone()
+                row = conn.execute("SELECT * FROM applications WHERE id=? AND user_id=?", (parts[1], user["id"])).fetchone()
                 conn.close()
             self._send(200, dict(row))
             return

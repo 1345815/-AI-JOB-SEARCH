@@ -9,6 +9,10 @@
     applications: [],
     selectedJobId: null,
     jobFilter: "",
+    jobCityFilter: "",
+    jobTypeFilter: "",
+    jobSourceFilter: "",
+    jobDeadlineFilter: "",
     jobSort: "score",
     interviewJobId: null,
     interviewContent: "",
@@ -134,7 +138,8 @@
     var needs = !!ev.needs_profile;
     var cls = needs ? "zero" : scoreClass(score);
     var scoreText = needs ? "—" : score;
-    var demo = job.is_demo ? '<span class="tag">示例</span>' : "";
+    var demo = job.is_demo ? '<span class="tag">示例岗位</span>' : "";
+    var source = job.source ? '<span class="tag tag-info">' + esc(job.source === "llm_suggested" ? "LLM 建议" : job.source === "local" ? "本地筛选" : job.source) + '</span>' : "";
     var deadline = job.deadline
       ? '<span class="tag ' + (job.deadline < new Date().toISOString().slice(0, 10) ? "tag-danger" : "tag-warn") + '">截止 ' + esc(job.deadline) + "</span>"
       : "";
@@ -142,7 +147,7 @@
       '<div class="list-row job-item' + (state.selectedJobId === job.id ? " selected" : "") + '" data-job="' + esc(job.id) + '">' +
       '<span class="score-badge ' + cls + '">' + scoreText + "</span>" +
       '<div class="row-main">' +
-      '<div class="row-title-wrap"><span class="row-title">' + esc(job.title) + "</span>" + demo + "</div>" +
+      '<div class="row-title-wrap"><span class="row-title">' + esc(job.title) + "</span>" + demo + source + "</div>" +
       '<div class="row-sub">' + esc(job.company) + " · " + esc(job.city) + " · " + esc(job.salary || "薪资未标注") + "</div>" +
       "</div>" +
       '<div class="row-meta">' + deadline + "</div>" +
@@ -283,6 +288,7 @@
     el("content").innerHTML =
       '<div class="content-inner">' +
       '<div class="page-head"><div><h1>求职总览</h1><p>你的 AI 求职工作台：跟踪岗位匹配、申请进度与面试准备。</p></div></div>' +
+      (empty ? '<div class="panel mb-14"><div class="panel-head"><strong>从这里开始</strong><span class="sub">完成后即可获得更准确的岗位推荐</span></div><div class="panel-body"><div class="onboarding"><button class="onboarding-step" data-onboard="profile"><b>1</b><span><strong>完善校园档案</strong><small>学校、专业、毕业时间和求职城市</small></span></button><button class="onboarding-step" data-onboard="profile"><b>2</b><span><strong>上传简历</strong><small>识别后逐项确认写入</small></span></button><button class="onboarding-step" data-onboard="jobs"><b>3</b><span><strong>搜索岗位</strong><small>筛选岗位并查看匹配度</small></span></button><button class="onboarding-step" data-onboard="pipeline"><b>4</b><span><strong>跟踪投递</strong><small>收藏、投递、面试和 Offer</small></span></button></div></div></div>' : '') +
       '<div class="stat-grid">' +
       statCard("岗位池", jobs.length, "stat-accent", "内置 + 手动录入") +
       statCard("平均匹配度", empty ? "—" : avg, "stat-info", empty ? "完善档案后启用个性化匹配" : "按五维框架评分") +
@@ -309,6 +315,9 @@
       "</div></div>" +
       "</div>";
     bindJobItems();
+    document.querySelectorAll("[data-onboard]").forEach(function (button) {
+      button.addEventListener("click", function () { location.hash = "#/" + button.getAttribute("data-onboard"); });
+    });
   }
 
   function renderJobs() {
@@ -322,6 +331,17 @@
         );
       });
     }
+    if (state.jobCityFilter) jobs = jobs.filter(function (j) { return j.city === state.jobCityFilter; });
+    if (state.jobTypeFilter) jobs = jobs.filter(function (j) { return j.posting_type === state.jobTypeFilter || j.work_type === state.jobTypeFilter; });
+    if (state.jobSourceFilter) jobs = jobs.filter(function (j) {
+      var source = j.is_demo ? "demo" : (j.source === "llm_suggested" ? "llm" : j.source === "local" ? "local" : "web");
+      return source === state.jobSourceFilter;
+    });
+    if (state.jobDeadlineFilter) {
+      var today = new Date(); today.setHours(0, 0, 0, 0);
+      var latest = new Date(today); latest.setDate(today.getDate() + Number(state.jobDeadlineFilter));
+      jobs = jobs.filter(function (j) { return j.deadline && new Date(j.deadline + "T00:00:00") <= latest; });
+    }
     if (state.jobSort === "score") jobs.sort(function (a, b) { return (b.evaluation || {}).overall - (a.evaluation || {}).overall; });
     else if (state.jobSort === "deadline") jobs.sort(function (a, b) { return (a.deadline || "9999").localeCompare(b.deadline || "9999"); });
     else jobs.sort(function (a, b) { return (b.created_at || "").localeCompare(a.created_at || ""); });
@@ -334,6 +354,11 @@
       '<div class="panel-head"><strong>岗位库</strong><span class="sub">' + jobs.length + " 个</span></div>" +
       '<div class="panel-body" style="padding:10px 12px">' +
       '<input id="jobSearch" type="text" style="flex:1;min-height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="搜索标题、公司、标签…" value="' + esc(state.jobFilter) + '">' +
+      '<div class="job-filters mt-8">' +
+      '<select id="jobCityFilter"><option value="">全部城市</option>' + selectOptions(state.jobs.map(function (j) { return j.city; }), state.jobCityFilter) + '</select>' +
+      '<select id="jobTypeFilter"><option value="">全部类型</option>' + selectOptions(state.jobs.map(function (j) { return j.posting_type; }).concat(state.jobs.map(function (j) { return j.work_type; })), state.jobTypeFilter) + '</select>' +
+      '<select id="jobSourceFilter"><option value="">全部来源</option><option value="demo"' + selectedAttr(state.jobSourceFilter, "demo") + '>示例岗位</option><option value="local"' + selectedAttr(state.jobSourceFilter, "local") + '>本地筛选结果</option><option value="llm"' + selectedAttr(state.jobSourceFilter, "llm") + '>LLM 建议岗位</option><option value="web"' + selectedAttr(state.jobSourceFilter, "web") + '>真实网页解析岗位</option></select>' +
+      '<select id="jobDeadlineFilter"><option value="">全部截止日期</option><option value="3"' + selectedAttr(state.jobDeadlineFilter, "3") + '>3 天内截止</option><option value="7"' + selectedAttr(state.jobDeadlineFilter, "7") + '>7 天内截止</option><option value="30"' + selectedAttr(state.jobDeadlineFilter, "30") + '>30 天内截止</option></select></div>' +
       '<div class="flex mt-8" style="gap:6px">' +
       '<button class="btn btn-sm' + (state.jobSort === "score" ? " btn-primary" : "") + '" data-sort="score">按匹配度</button>' +
       '<button class="btn btn-sm' + (state.jobSort === "deadline" ? " btn-primary" : "") + '" data-sort="deadline">按截止</button>' +
@@ -366,12 +391,23 @@
         renderJobs();
       });
     }
+    [["jobCityFilter", "jobCityFilter"], ["jobTypeFilter", "jobTypeFilter"], ["jobSourceFilter", "jobSourceFilter"], ["jobDeadlineFilter", "jobDeadlineFilter"]].forEach(function (item) {
+      var filter = el(item[0]);
+      if (filter) filter.addEventListener("change", function () { state[item[1]] = filter.value; renderJobs(); });
+    });
     document.querySelectorAll("[data-sort]").forEach(function (btn) {
       btn.addEventListener("click", function () { state.jobSort = btn.getAttribute("data-sort"); renderJobs(); });
     });
     bindJobParse();
     bindOnlineSearch();
     bindJobItems();
+  }
+
+  function selectedAttr(value, expected) { return value === expected ? " selected" : ""; }
+  function selectOptions(values, selected) {
+    return Array.from(new Set(values.filter(Boolean))).sort().map(function (value) {
+      return '<option value="' + esc(value) + '"' + selectedAttr(selected, value) + '>' + esc(value) + '</option>';
+    }).join("");
   }
 
   function bindOnlineSearch() {
@@ -444,8 +480,8 @@
       '<span class="tag tag-info">' + esc(job.posting_type) + "</span>" +
       '<span class="tag">' + esc(job.work_type) + "</span>" +
       '<span class="tag">' + esc(job.salary || "薪资未标注") + "</span>" +
-      (job.deadline ? '<span class="tag tag-warn">截止 ' + esc(job.deadline) + "</span>" : "") +
-      (job.source ? '<span class="tag">' + esc(job.source) + "</span>" : "") +
+      (job.deadline ? '<span class="tag ' + deadlineClass(job.deadline) + '">截止 ' + esc(job.deadline) + "</span>" : '<span class="tag">未标注截止日期</span>') +
+      '<span class="tag tag-info">' + esc(job.is_demo ? "示例岗位" : job.source === "llm_suggested" ? "LLM 建议，需核实" : job.source === "local" ? "本地筛选结果" : job.source || "真实网页解析岗位") + "</span>" +
       "</div>" +
       '<div class="detail-score-row"><div class="detail-score">' + (needs ? "—" : score) + "</div>" +
       '<div><div class="detail-verdict">' + esc(needs ? "完善档案后查看匹配度" : (ev.verdict || "待评估")) + "</div>" +
@@ -453,6 +489,7 @@
       (gateTags ? '<div class="detail-meta">' + gateTags + "</div>" : "") +
       "</div>" +
       '<div class="detail-sections">' +
+      '<div class="detail-section"><h3>下一步行动</h3><div class="text-mid">' + esc(nextAction(job, ev, app)) + '</div></div>' +
       '<div class="detail-section"><h3>五维评估</h3>' + barChart(ev) + "</div>" +
       (needs
         ? '<div class="detail-section"><h3>个性化匹配</h3><div class="muted text-mid">完善档案后，这里会显示你的技能、经历、文化与职业方向匹配分析。</div></div>'
@@ -475,6 +512,18 @@
       '<button class="btn btn-danger" data-action="deleteJob">删除</button>' +
       "</div></div>"
     );
+  }
+
+  function deadlineClass(deadline) {
+    var days = Math.ceil((new Date(deadline + "T00:00:00") - new Date()) / 86400000);
+    return days < 0 ? "tag-danger" : days <= 3 ? "tag-danger" : "tag-warn";
+  }
+  function nextAction(job, ev, app) {
+    if (job.is_demo) return "这是示例岗位。熟悉流程后，请粘贴真实岗位链接或手动录入。";
+    if (job.source === "llm_suggested") return "先打开原帖核实岗位、截止日期和要求，再决定是否收藏。";
+    if (!app) return "核对硬性门槛和岗位链接；确认适合后加入看板并记录投递计划。";
+    if (app.stage === "已收藏") return "准备定制简历并完成投递，随后更新为“已投递”。";
+    return app.follow_up_at ? "在 " + app.follow_up_at + " 前跟进，并补充最新沟通记录。" : "补充下一次跟进时间，避免遗漏进展。";
   }
 
   function bindJobItems() {
@@ -547,6 +596,7 @@
   function renderPipeline() {
     var apps = state.applications;
     var columns = ["已收藏", "已投递", "面试中", "Offer", "已归档"];
+    var reminders = applicationReminders(apps);
     var board =
       '<div class="board">' +
       columns.map(function (col) {
@@ -559,9 +609,11 @@
           (items.length ? items.map(function (a) {
             return (
               '<div class="board-card"><h4>' + esc(a.title) + "</h4><p>" + esc(a.company) + " · " + esc(a.city) + "</p>" +
+              (a.follow_up_at ? '<p class="card-reminder">跟进：' + esc(a.follow_up_at) + '</p>' : '') +
               '<div class="card-actions">' +
               (si.next ? '<button class="btn btn-sm btn-primary" data-move="' + a.id + '" data-to="' + esc(si.next) + '">推进到' + esc(si.next) + "</button>" : "") +
               (col !== "已归档" ? '<button class="btn btn-sm" data-move="' + a.id + '" data-to="已归档">归档</button>' : '<button class="btn btn-sm" data-move="' + a.id + '" data-to="已收藏">恢复</button>') +
+              '<button class="btn btn-sm" data-edit-app="' + a.id + '">编辑跟进</button>' +
               "</div></div>"
             );
           }).join("") : '<div class="muted text-sm" style="padding:8px">暂无</div>') +
@@ -583,6 +635,7 @@
       statCard("面试中", interviewing, "stat-info", "距离 Offer 一步之遥") +
       statCard("Offer", offers, offers ? "stat-warn" : "", "最终结果") +
       "</div>" +
+      (reminders.length ? '<div class="panel mt-14"><div class="panel-head"><strong>需要处理</strong><span class="sub">截止、跟进和久未更新提醒</span></div><div class="list">' + reminders.map(function (r) { return '<div class="list-row"><div class="row-main"><div class="row-title">' + esc(r.title) + '</div><div class="row-sub">' + esc(r.company) + '</div></div><span class="tag ' + r.cls + '">' + esc(r.text) + '</span></div>'; }).join("") + '</div></div>' : '') +
       '<div class="mt-14">' + board + "</div>" +
       "</div>";
 
@@ -591,6 +644,33 @@
         moveApplication(btn.getAttribute("data-move"), btn.getAttribute("data-to"));
       });
     });
+    document.querySelectorAll("[data-edit-app]").forEach(function (btn) { btn.addEventListener("click", function () { editApplication(btn.getAttribute("data-edit-app")); }); });
+  }
+
+  function applicationReminders(apps) {
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    return apps.filter(function (a) { return a.stage !== "已归档"; }).map(function (a) {
+      var follow = a.follow_up_at && new Date(a.follow_up_at + "T00:00:00");
+      var deadline = a.deadline && new Date(a.deadline + "T00:00:00");
+      var updated = a.updated_at && new Date(a.updated_at.replace(" ", "T"));
+      if (deadline && deadline >= today && deadline - today <= 3 * 86400000) return { title:a.title, company:a.company, text:"即将截止：" + a.deadline, cls:"tag-danger" };
+      if (follow && follow <= today) return { title:a.title, company:a.company, text:"需要跟进：" + a.follow_up_at, cls:"tag-warn" };
+      if (updated && today - updated > 7 * 86400000) return { title:a.title, company:a.company, text:"超过 7 天未更新", cls:"tag-warn" };
+      return null;
+    }).filter(Boolean);
+  }
+
+  async function editApplication(id) {
+    var app = state.applications.find(function (item) { return String(item.id) === String(id); });
+    if (!app) return;
+    var notes = prompt("备注 / 沟通记录", app.notes || ""); if (notes === null) return;
+    var contact = prompt("联系人（姓名、邮箱或电话）", app.contact || ""); if (contact === null) return;
+    var followUp = prompt("下次跟进日期（YYYY-MM-DD，留空可清除）", app.follow_up_at || ""); if (followUp === null) return;
+    var attachment = prompt("附件名称（例如：定制简历-产品岗.pdf）", app.attachment_name || ""); if (attachment === null) return;
+    try {
+      await api("applications/" + id, { method:"PATCH", body:{notes:notes, contact:contact, follow_up_at:followUp, attachment_name:attachment} });
+      await loadApplications(); toast("跟进记录已保存", "success"); renderPipeline();
+    } catch (e) { toast("保存失败：" + e.message, "error"); }
   }
 
   async function moveApplication(id, stage) {
@@ -661,12 +741,18 @@
       field("邮箱", "profileEmail", p.email || "") +
       field("求职状态", "profileStatus", p.status) +
       field("GitHub/作品集", "profileGithub", p.github || "") +
+      field("学校", "profileSchool", p.school || "") +
+      field("学历", "profileDegree", p.highest_degree || "") +
+      field("专业", "profileMajor", p.major || "") +
+      field("毕业时间", "profileGraduation", p.graduation_date || "") +
+      field("英语等级", "profileEnglish", p.english_level || "") +
       "</div>" +
       '<label class="field"><span>工作地点偏好</span><textarea id="profileLocation">' + esc(p.location_preference || "") + "</textarea></label>" +
       '<label class="field"><span>核心优势（每行一条）</span><textarea id="profileStrengths">' + esc((p.skills && p.skills.strong || []).join("\n")) + "</textarea></label>" +
       '<label class="field"><span>辅助技能（每行一条）</span><textarea id="profileModerate">' + esc((p.skills && p.skills.moderate || []).join("\n")) + "</textarea></label>" +
       '<label class="field"><span>职业目标（每行一条）</span><textarea id="profileGoals">' + esc((p.career_goals || []).join("\n")) + "</textarea></label>" +
       '<label class="field"><span>教育背景 / 项目经历（Markdown 文本）</span><textarea id="profileMore" style="min-height:160px">' + esc(p.notes || "") + "</textarea></label>" +
+      '<div class="resume-privacy">身份证号、紧急联系人电话等敏感资料不会被自动填入招聘表单，需你每次手动确认。</div>' +
       "</div></div>" +
       "</div>";
     el("saveProfile").addEventListener("click", saveProfile);
@@ -677,11 +763,19 @@
     formPanel.innerHTML = '<div class="panel-head"><strong>招聘网站助手</strong><span class="sub">粘贴招聘表单 HTML，识别字段并生成填写建议</span></div><div class="panel-body"><label class="field"><span>表单 HTML</span><textarea id="formHtml" placeholder="粘贴招聘官网表单 HTML"></textarea></label><button class="btn btn-primary mt-8" id="extractForm">识别字段</button><div id="formResult" class="mt-8"></div></div>';
     el("content").querySelector(".content-inner").appendChild(formPanel);
     el("extractForm").addEventListener("click", function () {
-      api("forms/extract", {method:"POST", body:{html:el("formHtml").value}}).then(function (form) {
+      var result = el("formResult");
+      var html = el("formHtml").value.trim();
+      if (!html) { result.innerHTML = '<div class="resume-error">请先粘贴招聘官网表单的 HTML 内容</div>'; return; }
+      result.innerHTML = '<div class="resume-loading">正在识别表单字段并生成填写计划…</div>';
+      api("forms/extract", {method:"POST", body:{html:html}}).then(function (form) {
         return api("forms/fill-plan", {method:"POST", body:{form_id:form.data.form_id, fields:form.data.fields}});
       }).then(function (plan) {
-        el("formResult").innerHTML = plan.data.mappings.map(function (m) { return '<div class="merge-row"><div class="merge-body"><strong>' + esc(m.label) + '</strong><div class="merge-value">' + esc(m.value == null ? "需手动确认" : m.value) + '</div></div></div>'; }).join("");
-      }).catch(function (e) { toast(e.message, "error"); });
+        var mappings = plan.data.mappings || [];
+        result.innerHTML = mappings.length ? '<div class="merge-title">填写计划（请在官网页面逐项核对后填写）</div>' + mappings.map(function (m) {
+          var hint = m.manual_confirmation ? '敏感字段：不会自动填写，请本人手动确认。' : '填写方式：' + (m.strategy === "date_normalize" ? "日期格式已规范化" : m.strategy === "select" ? "选择建议值" : "直接填写建议值");
+          return '<div class="merge-row"><div class="merge-body"><strong>' + esc(m.label || "未命名字段") + '</strong><div class="merge-value">建议值：' + esc(m.value == null ? "需手动确认" : m.value || "档案中暂无") + '</div><div class="merge-source">字段标识：' + esc(m.key || "未识别") + ' · ' + esc(hint) + '</div></div></div>';
+        }).join("") : '<div class="resume-error">没有识别到可填写字段。请确认粘贴的是完整表单 HTML。</div>';
+      }).catch(function (e) { result.innerHTML = '<div class="resume-error">识别失败：' + esc(e.message) + '。请检查 HTML 后重试。</div>'; });
     });
   }
 
@@ -860,7 +954,12 @@
         weak: (skills.weak || [])
       },
       career_goals: el("profileGoals").value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean),
-      notes: el("profileMore").value.trim()
+      notes: el("profileMore").value.trim(),
+      school: el("profileSchool").value.trim(),
+      highest_degree: el("profileDegree").value.trim(),
+      major: el("profileMajor").value.trim(),
+      graduation_date: el("profileGraduation").value.trim(),
+      english_level: el("profileEnglish").value.trim()
     };
     try {
       state.profile = await api("profile", { method: "PUT", body: body });
