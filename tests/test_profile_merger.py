@@ -30,3 +30,12 @@ def test_apply_only_accepted_paths():
     assert profile.get("name") == "王五"
     assert "email" not in profile
     assert applied == 1
+
+
+def test_student_profile_fields_can_be_reviewed_and_applied():
+    plan = build_merge_plan({}, {"school": "北京理工大学", "major": "信息管理", "graduation_date": "2027年毕业"}, {"school": "high", "major": "high", "graduation_date": "high"})
+    profile, applied = apply_paths({}, plan, ["school", "major"])
+    assert profile["school"] == "北京理工大学"
+    assert profile["major"] == "信息管理"
+    assert "graduation_date" not in profile
+    assert applied == 2

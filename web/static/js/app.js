@@ -726,10 +726,10 @@
       '<div class="content-inner">' +
       '<div class="page-head"><div><h1>个人资料</h1><p>填写你的真实经历与目标，岗位评分、简历和求职信会据此生成。资料仅存储在你的账号下。</p></div>' +
       '<div class="page-actions"><button class="btn btn-primary" id="saveProfile">保存档案</button></div></div>' +
-      '<div class="panel mb-14"><div class="panel-head"><strong>导入旧简历，自动填写</strong><span class="sub">支持 PDF / DOCX / TXT / MD，≤10MB</span></div>' +
+      '<div class="panel mb-14"><div class="panel-head"><strong>导入简历，逐项确认</strong><span class="sub">支持 PDF / DOCX / TXT / MD，≤10MB</span></div>' +
       '<div class="panel-body">' +
       '<div class="upload-zone" id="uploadZone"><input type="file" id="resumeFile" accept=".pdf,.docx,.txt,.md" hidden>' +
-      '<strong>点击选择或拖拽简历文件</strong><span class="muted">仅支持文字版简历，扫描件无法自动识别</span></div>' +
+      '<strong>点击选择或拖拽简历文件</strong><span class="muted">识别学校、专业、毕业时间、实习、项目、技能；每项须你确认后才写入</span></div>' +
       '<div id="resumeImportStatus" class="mt-8"></div>' +
       "</div></div>" +
       '<div id="resumeMergePanel"></div>' +
@@ -836,7 +836,7 @@
     var skipped = plan.skipped || [];
     var unknown = plan.unrecognized || [];
     var html =
-      '<div class="panel mb-14"><div class="panel-head"><strong>确认填充</strong><span class="sub">只应用你勾选的字段，已有信息不会被自动覆盖</span></div><div class="panel-body">';
+      '<div class="panel mb-14"><div class="panel-head"><strong>确认识别结果</strong><span class="sub">只应用你勾选的字段；低置信度默认不选，已有信息不会自动覆盖</span></div><div class="panel-body">';
     html += '<h4 class="merge-title">建议填入（' + fills.length + "）</h4>";
     if (fills.length) {
       html += fills.map(function (item) {
@@ -900,7 +900,7 @@
       '<label class="merge-row">' +
       '<input type="checkbox" class="merge-check" data-path="' + esc(item.field_path) + '"' + (checked ? " checked" : "") + ">" +
       '<div class="merge-body"><div class="merge-path">' + esc(label) + " <span class=\"tag\">" + esc(item.confidence || "high") + "</span></div>" +
-      '<div class="merge-value">简历值：' + esc(valText) + "</div>" + extra +
+      '<div class="merge-value">识别结果：' + esc(valText) + "</div>" + extra +
       (item.source_text ? '<div class="merge-source">原文：' + esc(item.source_text) + "</div>" : "") +
       "</div></label>"
     );

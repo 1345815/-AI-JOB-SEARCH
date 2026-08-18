@@ -46,3 +46,33 @@ def test_local_fallback_without_llm(monkeypatch):
     result = resume_extractor.extract_profile_from_resume(text, 1)
     assert result["extracted"].get("name") == "赵六"
     assert result["extracted"].get("email") == "z@example.com"
+
+
+def test_local_extracts_chinese_student_resume_sections(monkeypatch):
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """张同学
+手机：13800138000 | 邮箱：student@example.com
+求职意向：产品经理 / AI 产品实习生
+教育背景
+2023.09 - 2027.06 北京理工大学 本科 专业：信息管理与信息系统
+实习经历
+2025.06 - 2025.09 北京快速科技有限公司 | 产品实习生
+• 访谈 20 位用户，输出需求文档并推动上线
+项目经历
+2024.10 - 2025.01 校园求职助手
+• 使用 Python 和 React 完成简历分析功能
+专业技能
+Python、SQL、Figma、数据分析、项目管理
+语言能力
+CET-6
+"""
+    result = resume_extractor.extract_profile_from_resume(text, 1)
+    data = result["extracted"]
+    assert data["school"] == "北京理工大学"
+    assert data["highest_degree"] == "本科"
+    assert data["graduation_date"] == "2027年毕业"
+    assert data["english_level"] == "CET-6"
+    assert data["experiences"][0]["title"] == "产品实习生"
+    assert data["projects"][0]["title"] == "校园求职助手"
+    assert "Python" in data["skills"]["strong"]
+    assert result["source_text"]["education"]

@@ -5,6 +5,7 @@ import re
 
 SIMPLE_PATHS = [
     "name", "email", "phone", "city", "status", "github", "linkedin",
+    "school", "highest_degree", "major", "graduation_date", "english_level",
     "location_preference", "resume_language", "notes",
 ]
 LIST_PATHS = [

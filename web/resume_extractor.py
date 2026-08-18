@@ -1,6 +1,9 @@
-"""简历文本 → 档案 JSON 抽取（LLM + 本地兜底）。"""
+"""Chinese campus-resume text -> candidate profile extraction.
 
-import json
+The local extractor deliberately prefers missing data over invented data. It
+understands common Chinese resume sections so it works without an AI provider.
+"""
+
 import re
 
 from llm_client import llm_available, request_json
@@ -9,218 +12,184 @@ from llm_client import llm_available, request_json
 class ExtractionError(Exception):
     pass
 
+
 PROFILE_FIELDS = [
     "name", "email", "phone", "city", "status", "github", "linkedin",
+    "school", "highest_degree", "major", "graduation_date", "english_level",
     "location_preference", "resume_language", "languages", "education",
     "experiences", "projects", "skills", "certifications", "awards",
     "career_goals", "target_sectors", "deal_breakers", "notes",
 ]
 
-_SKILL_HINTS = [
-    "python", "java", "go", "javascript", "typescript", "react", "vue",
-    "sql", "数据分析", "机器学习", "深度学习", "ai", "llm", "prompt",
-    "产品", "运营", "增长", "用户研究", "项目管理", "excel", "word",
-    "photoshop", "figma", "剪辑", "文案", "英语", "cet-4", "cet-6",
-]
+_CITIES = "北京|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|合肥|长沙|厦门|珠海|天津|重庆|青岛|郑州|济南"
+_HEADERS = {
+    "education": ("教育背景", "教育经历", "教育", "学历背景"),
+    "experiences": ("实习经历", "工作经历", "实践经历", "校园经历", "社会实践"),
+    "projects": ("项目经历", "项目经验", "科研经历", "作品集"),
+    "skills": ("专业技能", "技能特长", "技能", "专业能力", "核心技能"),
+    "certifications": ("证书", "资格", "语言能力"),
+    "goals": ("求职意向", "求职目标", "职业目标", "意向岗位"),
+}
 
 
-def _snippet(text, value, max_len=80):
-    if not value:
-        return ""
-    v = str(value)
-    pos = text.find(v)
-    if pos < 0:
-        for token in re.findall(r"[^\s，。；、]{2,}", v):
-            pos = text.find(token)
-            if pos >= 0:
-                break
-    if pos < 0:
-        return ""
-    start = max(0, pos - 30)
-    end = min(len(text), pos + max_len)
-    return text[start:end].replace("\n", " ").strip()
+def _clean_line(line):
+    return re.sub(r"\s+", " ", line).strip(" \t-—–|｜•")
+
+
+def _lines(text):
+    return [_clean_line(line) for line in text.replace("\u3000", " ").splitlines() if _clean_line(line)]
+
+
+def _sections(lines):
+    result = {key: [] for key in _HEADERS}
+    active = None
+    for line in lines:
+        compact = re.sub(r"[：:\s]", "", line)
+        found = next((key for key, names in _HEADERS.items() if any(compact == name or (len(compact) <= 10 and name in compact) for name in names)), None)
+        if found:
+            active = found
+        elif active:
+            result[active].append(line)
+    return result
+
+
+def _period(value):
+    match = re.search(r"((?:19|20)\d{2}(?:[.年/-]\d{1,2})?\s*(?:-|—|至|~|/)\s*(?:(?:19|20)\d{2}(?:[.年/-]\d{1,2})?|至今|现在))", value)
+    return match.group(1) if match else ""
+
+
+def _unique(values):
+    output, seen = [], set()
+    for value in values:
+        value = _clean_line(str(value))
+        if value and value.lower() not in seen:
+            output.append(value)
+            seen.add(value.lower())
+    return output
+
+
+def _source(value):
+    return _clean_line(value)[:260]
+
+
+def _extract_education(lines, section):
+    education, sources = [], []
+    candidates = section or lines
+    for index, line in enumerate(candidates):
+        school_match = re.search(r"([\u4e00-\u9fa5A-Za-z]{2,40}(?:大学|学院|学校|University|College))", line, re.I)
+        if not school_match:
+            continue
+        context = " ".join(candidates[index:index + 3])
+        school = school_match.group(1)
+        degree = re.search(r"(本科|硕士(?:研究生)?|博士(?:研究生)?|大专|专科|学士)", context)
+        major = re.search(r"(?:专业|主修)\s*[:：]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z、/（）()\- ]{1,30})", context)
+        entry = {"school": school, "degree": degree.group(1) if degree else "", "period": _period(context), "detail": (major.group(1).strip(" |｜,，") if major else "")[:60]}
+        if not any(item["school"] == school for item in education):
+            education.append(entry)
+            sources.append(context)
+    return education, _source(" ".join(sources))
+
+
+def _extract_entries(section, kind):
+    entries, sources = [], []
+    if not section:
+        return entries, ""
+    date = re.compile(r"(?:19|20)\d{2}(?:[.年/-]\d{1,2})?\s*(?:-|—|至|~|/)\s*(?:(?:19|20)\d{2}(?:[.年/-]\d{1,2})?|至今|现在)")
+    starts = [index for index, line in enumerate(section) if date.search(line)]
+    for number, start in enumerate(starts):
+        block = section[start:(starts[number + 1] if number + 1 < len(starts) else len(section))]
+        heading, period = block[0], _period(block[0])
+        prefix = date.sub("", heading).strip(" |｜·,，-—")
+        points = [_clean_line(line.lstrip("•·-—0123456789.、 ")) for line in block[1:] if len(_clean_line(line)) > 3]
+        if kind == "experiences":
+            parts = [part.strip() for part in re.split(r"\s*(?:\||｜|·|–|—)\s*", prefix) if part.strip()]
+            entry = {"company": (parts[0] if parts else "")[:80], "title": (parts[1] if len(parts) > 1 else prefix)[:80], "period": period, "points": points[:6]}
+        else:
+            entry = {"title": prefix[:100], "period": period, "points": points[:6]}
+        if entry.get("title") and not any(item.get("title") == entry.get("title") and item.get("period") == period for item in entries):
+            entries.append(entry)
+            sources.extend(block)
+    return entries, _source(" ".join(sources))
+
+
+def _extract_skills(lines, section):
+    content = " ".join(section) if section else " ".join(lines)
+    hints = ["Python", "Java", "Go", "C++", "SQL", "MySQL", "PostgreSQL", "Excel", "Tableau", "Power BI", "React", "Vue", "JavaScript", "TypeScript", "Figma", "Photoshop", "Axure", "PRD", "用户研究", "数据分析", "机器学习", "深度学习", "大模型", "LLM", "Prompt", "项目管理", "运营", "英语"]
+    skills = [hint for hint in hints if re.search(re.escape(hint), content, re.I)]
+    for line in section:
+        if "：" in line or ":" in line:
+            skills.extend(re.split(r"[,，;；、/|｜]", re.split(r"[:：]", line, maxsplit=1)[1]))
+    cleaned = [skill for skill in _unique(skills) if 1 < len(skill) <= 24 and not re.search(r"^(熟悉|掌握|了解|具备)$", skill)]
+    return cleaned[:30], _source(content)
 
 
 def _local_extract(text):
-    extracted = {}
-    confidence = {}
-    unrecognized = []
-
-    name_match = re.search(r"姓\s*名\s*[:：]\s*(\S+)", text) or re.search(
-        r"^\s*([\u4e00-\u9fa5]{2,4})\s*(?:求职简历|个人简历|简历|Resume)", text
-    )
-    first_line = next((l.strip() for l in text.splitlines() if l.strip()), "")
-    if name_match:
-        extracted["name"] = name_match.group(1)
-        confidence["name"] = "high"
-    elif first_line and len(first_line) <= 4:
-        extracted["name"] = first_line
-        confidence["name"] = "medium"
-
-    email = re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text)
-    if email:
-        extracted["email"] = email.group(0)
-        confidence["email"] = "high"
-    phone = re.search(r"(?<!\d)(1[3-9]\d{9})(?!\d)", text)
-    if phone:
-        extracted["phone"] = phone.group(0)
-        confidence["phone"] = "high"
-    city = re.search(r"(?:城市|所在地|现居)\s*[:：]?\s*([\u4e00-\u9fa5]{2,6})", text)
+    extracted, confidence, sources, unrecognized = {}, {}, {}, []
+    lines, sections = _lines(text), _sections(_lines(text))
+    name = re.search(r"姓\s*名\s*[:：]\s*([\u4e00-\u9fa5]{2,4}|[A-Za-z][A-Za-z .'-]{1,40})", text)
+    if not name:
+        candidate = next((line for line in lines[:10] if re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", line)), "")
+        name = re.match(r"(.+)", candidate) if candidate else None
+    if name:
+        extracted["name"] = name.group(1).strip(); confidence["name"] = "high" if "姓名" in text else "medium"; sources["name"] = _source(name.group(0))
+    for key, match in (("email", re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)), ("phone", re.search(r"(?<!\d)(1[3-9]\d{9})(?!\d)", text)), ("github", re.search(r"https?://(?:www\.)?github\.com/[\w.-]+", text, re.I))):
+        if match:
+            extracted[key] = match.group(0); confidence[key] = "high"; sources[key] = _source(match.group(0))
+    city = re.search(r"(?:现居|所在(?:地|城市)?|居住地|工作城市)\s*[:：]?\s*(" + _CITIES + r")", text)
     if city:
-        extracted["city"] = city.group(1)
-        confidence["city"] = "high"
-    elif re.search(r"(北京|上海|深圳|广州|杭州|郑州|成都|武汉|南京|苏州|西安|合肥|长沙|厦门|珠海)", text[:300]):
-        extracted["city"] = re.search(r"(北京|上海|深圳|广州|杭州|郑州|成都|武汉|南京|苏州|西安|合肥|长沙|厦门|珠海)", text[:300]).group(1)
-        confidence["city"] = "medium"
-    github = re.search(r"https?://(?:www\.)?github\.com/[\w-]+", text)
-    if github:
-        extracted["github"] = github.group(0)
-        confidence["github"] = "high"
-
-    status_match = re.search(r"求职方向\s*[:：]\s*(.+)", text)
-    if status_match:
-        extracted["status"] = status_match.group(1).strip()
-        confidence["status"] = "high"
-
-    skills = []
-    for line in text.splitlines():
-        s = line.strip()
-        skill_line = re.match(r"(?:专业技能|技能|擅长|Skills)\s*[:：]\s*(.+)", s, re.IGNORECASE)
-        if skill_line:
-            parts = re.split(r"[,，;；、/|]|\s{2,}", skill_line.group(1))
-            for part in parts:
-                p = part.strip().strip("。；，")
-                if 1 <= len(p) <= 30 and p not in skills:
-                    skills.append(p)
-        elif "|" in s:
-            left, right = s.split("|", 1)
-            if re.search(r"(?:19|20)\d{2}", right):
-                continue
-            pool = [left.strip()] + [p.strip() for p in re.split(r"[·•,，;；、/]", right) if p.strip()]
-            for p in pool:
-                if 1 <= len(p) <= 30 and not re.match(r"^\d", p) and p not in skills:
-                    skills.append(p)
-    if skills:
-        extracted["skills"] = {"strong": skills, "moderate": [], "weak": []}
-        confidence["skills.strong"] = "medium"
-
-    education = []
-    for line in text.splitlines():
-        school_match = re.search(r"([\u4e00-\u9fa5]{2,}(?:大学|学院|学校))", line)
-        if not school_match:
-            continue
-        school = school_match.group(1)
-        if any(school in (e.get("school") or "") for e in education):
-            continue
-        period_match = re.search(
-            r"((?:19|20)\d{2}\s*[-—/.年]+\s*(?:(?:19|20)\d{2}|至今|现在|今))",
-            line,
-        )
-        degree_match = re.search(r"(本科|硕士|博士|大专|学士)", line)
-        detail = re.sub(r"^(教育|学校|学历|院校)\s*[:：]\s*", "", line.replace(school, ""))
-        if period_match:
-            detail = detail.replace(period_match.group(1), "")
-        detail = re.sub(r"[\s\-—–|｜]+", " ", detail).strip(" :：")
-        education.append({
-            "school": school,
-            "degree": degree_match.group(1) if degree_match else "",
-            "period": period_match.group(1) if period_match else "",
-            "detail": detail[:80],
-        })
+        extracted["city"] = city.group(1); confidence["city"] = "high"; sources["city"] = _source(city.group(0))
+    goal = re.search(r"(?:求职意向|意向岗位|求职目标|职业目标)\s*[:：]?\s*([^\n]{2,80})", text)
+    if goal:
+        value = goal.group(1).strip(" |｜,，；;")
+        extracted["career_goals"], extracted["status"] = _unique(re.split(r"[,，/、|｜]", value)), value
+        confidence["career_goals"] = confidence["status"] = "high"; sources["career_goals"] = sources["status"] = _source(goal.group(0))
+    locations = re.search(r"(?:意向城市|期望城市|工作地点)\s*[:：]?\s*([^\n]{2,80})", text)
+    if locations:
+        extracted["location_preference"] = locations.group(1).strip(); confidence["location_preference"] = "high"; sources["location_preference"] = _source(locations.group(0))
+    education, education_source = _extract_education(lines, sections["education"])
     if education:
-        extracted["education"] = education
-        confidence["education"] = "medium"
-
-    experiences = []
-    exp_pattern = re.compile(r"^\s*(.+?)\s*·\s*(.+?)\s*[|｜]\s*((?:19|20)\d{2}.*)$")
-    for line in text.splitlines():
-        m = exp_pattern.match(line.strip())
-        if m:
-            experiences.append({
-                "title": m.group(2).strip(),
-                "company": m.group(1).strip(),
-                "period": m.group(3).strip(),
-                "points": [],
-            })
-    if experiences:
-        extracted["experiences"] = experiences
-        confidence["experiences"] = "medium"
-
-    projects = []
-    for line in text.splitlines():
-        s = line.strip()
-        if "独立开发" not in s or "·" not in s:
-            continue
-        title_part = s.split("·", 1)[1].strip()
-        pm = re.match(r"(.+?)\s*[|｜]\s*((?:19|20)\d{2}.*)$", title_part)
-        title = pm.group(1).strip() if pm else title_part
-        period = pm.group(2).strip() if pm else ""
-        if any(p.get("title") == title for p in projects):
-            continue
-        projects.append({"title": title, "period": period, "points": []})
-    if projects:
-        extracted["projects"] = projects
-        confidence["projects"] = "medium"
-
-    for line in text.splitlines():
-        s = line.strip()
-        if re.search(r"证书|CET|雅思|托福", s):
-            extracted.setdefault("certifications", [])
-            cleaned = re.sub(r"^[\s\-—–|｜]*", "", s).strip()
-            if cleaned not in extracted["certifications"]:
-                extracted["certifications"].append(cleaned)
-            confidence.setdefault("certifications", "medium")
-        elif re.search(r"(一等奖|二等奖|三等奖|获奖|冠军|优秀)", s):
-            extracted.setdefault("awards", [])
-            cleaned = re.sub(r"^(获奖|奖项)\s*[:：]\s*", "", s).strip()
-            if cleaned not in extracted["awards"]:
-                extracted["awards"].append(cleaned)
-            confidence.setdefault("awards", "medium")
-
-    return extracted, confidence, unrecognized
+        extracted["education"] = education; confidence["education"] = "high" if sections["education"] else "medium"; sources["education"] = education_source
+        latest = education[0]
+        for key, value in (("school", latest["school"]), ("highest_degree", latest["degree"]), ("major", latest["detail"])):
+            if value:
+                extracted[key] = value; confidence[key] = confidence["education"]; sources[key] = education_source
+        end = re.search(r"(?:-|—|至|~|/)\s*((?:19|20)\d{2})(?:[.年/-]\d{1,2})?", latest["period"])
+        if end:
+            extracted["graduation_date"] = end.group(1) + "年毕业"; confidence["graduation_date"] = confidence["education"]; sources["graduation_date"] = education_source
+    for field, section_key, kind in (("experiences", "experiences", "experiences"), ("projects", "projects", "projects")):
+        entries, source = _extract_entries(sections[section_key], kind)
+        if entries:
+            extracted[field] = entries; confidence[field] = "high"; sources[field] = source
+    skills, skill_source = _extract_skills(lines, sections["skills"])
+    if skills:
+        extracted["skills"] = {"strong": skills, "moderate": [], "weak": []}; confidence["skills.strong"] = "high" if sections["skills"] else "low"; sources["skills.strong"] = skill_source
+    english = re.search(r"(?:CET[- ]?[46]|大学英语[四六]级|雅思\s*\d(?:\.\d)?|托福\s*\d{2,3})", text, re.I)
+    if english:
+        extracted["english_level"] = english.group(0).upper().replace(" ", ""); confidence["english_level"] = "high"; sources["english_level"] = _source(english.group(0))
+    certificates = [line for line in sections["certifications"] if re.search(r"CET|雅思|托福|证书|资格", line, re.I)]
+    if certificates:
+        extracted["certifications"] = _unique(certificates); confidence["certifications"] = "medium"; sources["certifications"] = _source(" ".join(certificates))
+    return extracted, confidence, unrecognized, sources
 
 
 def _sanitize(data):
-    if not isinstance(data, dict):
-        return {}
-    return {k: v for k, v in data.items() if k in PROFILE_FIELDS}
+    return {key: value for key, value in data.items() if key in PROFILE_FIELDS} if isinstance(data, dict) else {}
 
 
 def extract_profile_from_resume(text, user_id):
-    """返回 {"extracted", "confidence", "unrecognized"}，不直接写库。"""
-    extracted = {}
-    confidence = {}
-    unrecognized = []
-
+    """Return a reviewable extraction; it never writes a profile directly."""
     if llm_available():
         last_error = None
         for _ in range(2):
             try:
-                system = (
-                    "你是简历信息抽取器。只输出 JSON 对象，不要任何解释。"
-                    "简历中没有的信息输出 null，禁止编造或推测。"
-                    "数字、百分比、时间必须原样保留。"
-                    "字段仅限：" + ", ".join(PROFILE_FIELDS) + "。"
-                    "skills 结构为 {\"strong\":[],\"moderate\":[],\"weak\":[]}。"
-                )
-                user = "请抽取以下简历：\n\n" + text[:12000]
-                raw = request_json(system, user)
+                system = ("你是中国校招简历信息抽取器。只输出 JSON 对象，不要解释。简历没有明确写出的信息必须为 null，禁止猜测。数字、时间和公司名原样保留。education/experiences/projects 要保留结构化条目与要点；skills 为 strong/moderate/weak 数组。字段仅限：" + ", ".join(PROFILE_FIELDS))
+                raw = request_json(system, "请抽取以下简历：\n\n" + text[:12000])
                 extracted = _sanitize(raw)
-                confidence = {k: "high" for k in extracted}
+                confidence = {key: "medium" for key, value in extracted.items() if value not in (None, "", [], {})}
                 unrecognized = raw.get("unrecognized", []) if isinstance(raw.get("unrecognized"), list) else []
-                break
+                return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": {key: "AI 已从简历原文提取，请人工核对" for key in extracted}}
             except RuntimeError as exc:
                 last_error = exc
-        else:
-            raise ExtractionError(f"LLM 返回无法解析的 JSON：{str(last_error)[:200]}")
-    else:
-        extracted, confidence, unrecognized = _local_extract(text)
-
-    return {
-        "extracted": extracted,
-        "confidence": confidence,
-        "unrecognized": unrecognized,
-        "source_text": {
-            k: _snippet(text, v) for k, v in extracted.items() if v not in (None, "", [], {})
-        },
-    }
+        raise ExtractionError("AI 简历识别暂时不可用：" + str(last_error)[:160])
+    extracted, confidence, unrecognized, sources = _local_extract(text)
+    return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": sources}
