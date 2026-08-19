@@ -6,6 +6,8 @@
     view: "dashboard",
     profile: {},
     jobs: [],
+    jobsTotal: 0,
+    jobFacets: { cities: [], types: [] },
     applications: [],
     selectedJobId: null,
     jobFilter: "",
@@ -14,11 +16,19 @@
     jobSourceFilter: "",
     jobDeadlineFilter: "",
     jobSort: "score",
+    searchResults: [],
+    searchSkipped: [],
+    searchHistory: [],
+    searchMode: null,
     interviewJobId: null,
     interviewContent: "",
     chatOpen: false,
     settings: null
   };
+
+  try {
+    state.searchHistory = JSON.parse(localStorage.getItem("careerpilot_search_history") || "[]").filter(Boolean).slice(0, 8);
+  } catch (e) { state.searchHistory = []; }
 
   var el = function (id) { return document.getElementById(id); };
 
@@ -39,7 +49,7 @@
     var resp = await fetch("/api/" + path, opts);
     var data;
     try { data = await resp.json(); } catch (e) { data = {}; }
-    if (!resp.ok) throw new Error(data.error || data.message || ("请求失败 " + resp.status));
+    if (!resp.ok || data.ok === false) throw new Error(data.error || data.message || ("请求失败 " + resp.status));
     return data;
   }
 
@@ -48,6 +58,8 @@
     if (!wrap) return;
     var t = document.createElement("div");
     t.className = "toast" + (type ? " " + type : "");
+    t.setAttribute("role", type === "error" ? "alert" : "status");
+    t.setAttribute("aria-live", type === "error" ? "assertive" : "polite");
     t.textContent = msg;
     wrap.appendChild(t);
     setTimeout(function () { t.remove(); }, 3200);
@@ -132,7 +144,7 @@
     );
   }
 
-  function jobCard(job) {
+  function jobCard(job, searchResult, searchIndex) {
     var ev = job.evaluation || {};
     var score = ev.overall || 0;
     var needs = !!ev.needs_profile;
@@ -143,14 +155,22 @@
     var deadline = job.deadline
       ? '<span class="tag ' + (job.deadline < new Date().toISOString().slice(0, 10) ? "tag-danger" : "tag-warn") + '">截止 ' + esc(job.deadline) + "</span>"
       : "";
+    var searchAction = "";
+    if (searchResult) {
+      searchAction = job.addedThisSearch
+        ? '<button class="btn btn-sm" data-undo-search="' + searchIndex + '">撤销加入</button>'
+        : job.saved_job_id
+          ? '<span class="tag tag-accent">已在岗位库</span>'
+          : '<button class="btn btn-sm btn-primary" data-add-search="' + searchIndex + '">加入岗位库</button>';
+    }
     return (
-      '<div class="list-row job-item' + (state.selectedJobId === job.id ? " selected" : "") + '" data-job="' + esc(job.id) + '">' +
+      '<div class="list-row job-item' + (state.selectedJobId === job.id && !searchResult ? " selected" : "") + '" data-job="' + esc(job.id) + '"' + (searchResult ? ' data-search-result="true"' : "") + ">" +
       '<span class="score-badge ' + cls + '">' + scoreText + "</span>" +
       '<div class="row-main">' +
       '<div class="row-title-wrap"><span class="row-title">' + esc(job.title) + "</span>" + demo + source + "</div>" +
       '<div class="row-sub">' + esc(job.company) + " · " + esc(job.city) + " · " + esc(job.salary || "薪资未标注") + "</div>" +
       "</div>" +
-      '<div class="row-meta">' + deadline + "</div>" +
+      '<div class="row-meta">' + deadline + searchAction + "</div>" +
       "</div>"
     );
   }
@@ -322,41 +342,18 @@
 
   function renderJobs() {
     var jobs = state.jobs.slice();
-    var q = state.jobFilter.toLowerCase();
-    if (q) {
-      jobs = jobs.filter(function (j) {
-        return (
-          (j.title + " " + j.company + " " + j.city + " " + (j.tags || []).join(" ") + " " + (j.description || ""))
-            .toLowerCase().indexOf(q) >= 0
-        );
-      });
-    }
-    if (state.jobCityFilter) jobs = jobs.filter(function (j) { return j.city === state.jobCityFilter; });
-    if (state.jobTypeFilter) jobs = jobs.filter(function (j) { return j.posting_type === state.jobTypeFilter || j.work_type === state.jobTypeFilter; });
-    if (state.jobSourceFilter) jobs = jobs.filter(function (j) {
-      var source = j.is_demo ? "demo" : (j.source === "llm_suggested" ? "llm" : j.source === "local" ? "local" : "web");
-      return source === state.jobSourceFilter;
-    });
-    if (state.jobDeadlineFilter) {
-      var today = new Date(); today.setHours(0, 0, 0, 0);
-      var latest = new Date(today); latest.setDate(today.getDate() + Number(state.jobDeadlineFilter));
-      jobs = jobs.filter(function (j) { return j.deadline && new Date(j.deadline + "T00:00:00") <= latest; });
-    }
-    if (state.jobSort === "score") jobs.sort(function (a, b) { return (b.evaluation || {}).overall - (a.evaluation || {}).overall; });
-    else if (state.jobSort === "deadline") jobs.sort(function (a, b) { return (a.deadline || "9999").localeCompare(b.deadline || "9999"); });
-    else jobs.sort(function (a, b) { return (b.created_at || "").localeCompare(a.created_at || ""); });
 
     var selected = state.jobs.find(function (j) { return j.id === state.selectedJobId; }) || jobs[0];
     if (selected) state.selectedJobId = selected.id;
 
     var listHtml =
       '<div class="panel jobs-list">' +
-      '<div class="panel-head"><strong>岗位库</strong><span class="sub">' + jobs.length + " 个</span></div>" +
+      '<div class="panel-head"><strong>岗位库</strong><span class="sub">共 ' + state.jobsTotal + " 个</span></div>" +
       '<div class="panel-body" style="padding:10px 12px">' +
       '<input id="jobSearch" type="text" style="flex:1;min-height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="搜索标题、公司、标签…" value="' + esc(state.jobFilter) + '">' +
       '<div class="job-filters mt-8">' +
-      '<select id="jobCityFilter"><option value="">全部城市</option>' + selectOptions(state.jobs.map(function (j) { return j.city; }), state.jobCityFilter) + '</select>' +
-      '<select id="jobTypeFilter"><option value="">全部类型</option>' + selectOptions(state.jobs.map(function (j) { return j.posting_type; }).concat(state.jobs.map(function (j) { return j.work_type; })), state.jobTypeFilter) + '</select>' +
+      '<select id="jobCityFilter"><option value="">全部城市</option>' + selectOptions(state.jobFacets.cities || [], state.jobCityFilter) + '</select>' +
+      '<select id="jobTypeFilter"><option value="">全部类型</option>' + selectOptions(state.jobFacets.types || [], state.jobTypeFilter) + '</select>' +
       '<select id="jobSourceFilter"><option value="">全部来源</option><option value="demo"' + selectedAttr(state.jobSourceFilter, "demo") + '>示例岗位</option><option value="local"' + selectedAttr(state.jobSourceFilter, "local") + '>本地筛选结果</option><option value="llm"' + selectedAttr(state.jobSourceFilter, "llm") + '>LLM 建议岗位</option><option value="web"' + selectedAttr(state.jobSourceFilter, "web") + '>真实网页解析岗位</option></select>' +
       '<select id="jobDeadlineFilter"><option value="">全部截止日期</option><option value="3"' + selectedAttr(state.jobDeadlineFilter, "3") + '>3 天内截止</option><option value="7"' + selectedAttr(state.jobDeadlineFilter, "7") + '>7 天内截止</option><option value="30"' + selectedAttr(state.jobDeadlineFilter, "30") + '>30 天内截止</option></select></div>' +
       '<div class="flex mt-8" style="gap:6px">' +
@@ -366,43 +363,73 @@
       "</div></div>" +
       '<div class="list" style="border-top:1px solid var(--border)">' +
       (jobs.length ? jobs.map(jobCard).join("") : emptyBlock("没有匹配的岗位", "换个关键词试试")) +
-      "</div></div>";
+      "</div>" +
+      (state.jobs.length < state.jobsTotal ? '<div class="panel-body" style="padding:10px 12px;border-top:1px solid var(--border)"><button class="btn btn-sm" id="loadMoreJobs">加载更多（已显示 ' + state.jobs.length + " / 共 " + state.jobsTotal + "）</button></div>" : "") +
+      "</div>";
 
     var detailHtml = selected ? jobDetail(selected) : '<div class="panel"><div class="panel-body">' + emptyBlock("选择岗位查看评估", "") + "</div></div>";
+
+    var searchHtml = "";
+    var pendingSearchCount = (state.searchResults || []).filter(function (job) { return job.source === "local" && !job.saved_job_id; }).length;
+    if (state.searchResults && state.searchResults.length) {
+      searchHtml =
+        '<div class="panel mb-14" id="searchResultsPanel"><div class="panel-head">' +
+        '<strong>搜索结果</strong><span class="sub">' + state.searchResults.length + " 个 · 关键词：" + esc(state.searchKeyword || "") + "</span></div>" +
+        '<div class="panel-body" style="padding:10px 12px">' +
+        '<div class="flex" style="gap:8px;margin-bottom:10px">' +
+        '<button class="btn btn-sm btn-primary" id="addSearchAll"' + (pendingSearchCount ? "" : " disabled") + '>全部加入岗位库' + (pendingSearchCount ? "（" + pendingSearchCount + "）" : "") + "</button>" +
+        '<button class="btn btn-sm" id="clearSearchResults">清除搜索结果</button>' +
+        "</div>" +
+        '<div class="list" style="border-top:1px solid var(--border)">' +
+        state.searchResults.map(function (job, index) { return jobCard(job, true, index); }).join("") +
+        "</div>" +
+        ((state.searchSkipped || []).length ? '<details class="merge-skipped mt-8"><summary>部分结果处理失败（' + state.searchSkipped.length + "）</summary>" + state.searchSkipped.map(function (item) { return '<div class="text-sm muted">· ' + esc(item.url || "未知链接") + "：" + esc(item.reason || "未知原因") + "</div>"; }).join("") + "</details>" : "") +
+        "</div></div>";
+    } else if (state.searchMode) {
+      searchHtml = '<div class="panel mb-14"><div class="panel-body">' + emptyBlock("没有找到匹配岗位", "试试换关键词，或开启 AI 模式后搜索") +
+        '<div class="flex mt-8" style="justify-content:flex-end"><button class="btn btn-sm" id="clearSearchResults">清除搜索结果</button></div></div></div>';
+    }
 
     el("content").innerHTML =
       '<div class="content-inner">' +
       '<div class="page-head"><div><h1>岗位搜索</h1><p>基于你的档案，按技能、经历、文化与职业方向五维评分。</p></div></div>' +
       '<div class="panel job-parse-bar mb-14"><div class="panel-body">' +
       '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><button class="btn btn-primary" id="btnOnlineSearch">联网搜索（AI 模式）</button><span class="tag" id="aiModeBadge">检测中…</span></div>' +
+      (state.searchHistory.length ? '<div class="flex" style="gap:6px;flex-wrap:wrap;margin-bottom:10px"><span class="muted text-sm">最近搜索</span>' + state.searchHistory.map(function (keyword) { return '<button class="btn btn-sm" data-search-history="' + esc(keyword) + '">' + esc(keyword) + "</button>"; }).join("") + "</div>" : "") +
       '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
       '<input id="companySearchName" type="text" style="flex:1;min-width:200px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="心仪公司名，如：网易" value="' + esc(state.companySearch || "") + '">' +
       '<input id="companySearchCity" type="text" style="width:130px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="城市（可选）" value="' + esc(state.companySearchCity || "") + '">' +
       '<button class="btn btn-primary" id="btnCompanySearch">按公司搜索</button>' +
       "</div>" +
-      '<div id="companySearchStatus" class="mt-8"></div>' +
+      '<div id="companySearchStatus" class="mt-8" role="status" aria-live="polite" aria-atomic="true"></div>' +
       '<div class="flex" style="gap:8px;flex-wrap:wrap">' +
       '<input id="jobUrlInput" type="url" style="flex:1;min-width:280px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="粘贴岗位网址，自动提取岗位与要求">' +
       '<button class="btn btn-primary" id="jobUrlParse">快速解析</button>' +
       "</div>" +
-      '<div id="jobParseStatus" class="mt-8"></div>' +
+      '<div id="jobParseStatus" class="mt-8" role="status" aria-live="polite" aria-atomic="true"></div>' +
       "</div></div>" +
+      searchHtml +
       '<div class="jobs-layout">' + listHtml + '<div class="jobs-detail">' + detailHtml + "</div></div>" +
       "</div>";
+
+    bindSearchResultsActions();
+    var loadMore = el("loadMoreJobs");
+    if (loadMore) loadMore.addEventListener("click", loadMoreJobs);
 
     var search = el("jobSearch");
     if (search) {
       search.addEventListener("input", function () {
         state.jobFilter = search.value;
-        renderJobs();
+        clearTimeout(state.jobFilterTimer);
+        state.jobFilterTimer = setTimeout(function () { loadJobs().then(renderJobs).catch(function (e) { toast(e.message, "error"); }); }, 250);
       });
     }
     [["jobCityFilter", "jobCityFilter"], ["jobTypeFilter", "jobTypeFilter"], ["jobSourceFilter", "jobSourceFilter"], ["jobDeadlineFilter", "jobDeadlineFilter"]].forEach(function (item) {
       var filter = el(item[0]);
-      if (filter) filter.addEventListener("change", function () { state[item[1]] = filter.value; renderJobs(); });
+      if (filter) filter.addEventListener("change", function () { state[item[1]] = filter.value; loadJobs().then(renderJobs).catch(function (e) { toast(e.message, "error"); }); });
     });
     document.querySelectorAll("[data-sort]").forEach(function (btn) {
-      btn.addEventListener("click", function () { state.jobSort = btn.getAttribute("data-sort"); renderJobs(); });
+      btn.addEventListener("click", function () { state.jobSort = btn.getAttribute("data-sort"); loadJobs().then(renderJobs).catch(function (e) { toast(e.message, "error"); }); });
     });
     bindJobParse();
     bindOnlineSearch();
@@ -421,18 +448,57 @@
     var btn = el("btnOnlineSearch"), badge = el("aiModeBadge");
     if (!btn) return;
     api("jobs/search").then(function (res) {
-      var data = res.data; btn.disabled = !data.enabled;
-      badge.textContent = data.enabled ? "AI 模式已开启 · " + data.provider : "AI 模式未开启 · 联网搜索不可用";
-      btn.title = data.enabled ? "" : "请在设置中开启 AI 模式并配置 API key";
+      var data = res.data; btn.disabled = false;
+      badge.textContent = data.enabled ? "AI 模式已开启 · " + data.provider : "本地搜索模式";
+      btn.textContent = data.enabled ? "联网搜索（AI 模式）" : "搜索岗位（本地模式）";
+      btn.title = data.enabled ? "" : "当前从内置岗位库筛选；开启 AI 后可获得更多建议";
     });
-    btn.addEventListener("click", function () {
-      var keywords = prompt("输入岗位关键词", state.jobFilter || "AI 游戏策划");
+    var runSearch = function (keywords) {
+      keywords = (keywords || "").trim();
       if (!keywords) return;
       btn.disabled = true;
+      var originalText = btn.textContent;
+      btn.textContent = "搜索中…";
       api("jobs/search", { method:"POST", body:{keywords:keywords, limit:20} }).then(function (data) {
-        return loadJobs().then(function () { renderJobs(); toast(data.hint || "岗位搜索完成", "success"); });
-      }).catch(function (e) { toast(e.message, "error"); }).finally(function () { btn.disabled = false; });
+        var results = (data.local_results || []).concat(data.data || []);
+        var seen = {};
+        results = results.filter(function (job) {
+          var key = job.id || job.url || (job.title + job.company);
+          if (seen[key]) return false;
+          seen[key] = true;
+          return true;
+        });
+        state.searchResults = results;
+        state.searchSkipped = data.skipped || [];
+        state.searchMode = data.mode || (data.data && data.data.length ? "llm" : "local");
+        state.searchKeyword = keywords;
+        rememberSearch(keywords);
+        return loadJobs().then(function () {
+          renderJobs();
+          if (!results.length) {
+            toast("没有找到匹配岗位，试试换关键词", "info");
+          } else {
+            toast("搜索到 " + results.length + " 个岗位，可一键加入岗位库", "success");
+          }
+          if (data.skipped && data.skipped.length) {
+            toast("有 " + data.skipped.length + " 个链接抓取失败，详情见结果区", "warn");
+          }
+        });
+      }).catch(function (e) {
+        var status = el("jobParseStatus");
+        if (status) status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
+        toast(e.message, "error");
+      }).finally(function () { btn.disabled = false; btn.textContent = originalText; });
+    };
+    btn.addEventListener("click", function () { runSearch(prompt("输入岗位关键词", state.jobFilter || "AI 游戏策划")); });
+    document.querySelectorAll("[data-search-history]").forEach(function (historyBtn) {
+      historyBtn.addEventListener("click", function () { runSearch(historyBtn.getAttribute("data-search-history")); });
     });
+  }
+
+  function rememberSearch(keyword) {
+    state.searchHistory = [keyword].concat(state.searchHistory.filter(function (item) { return item !== keyword; })).slice(0, 8);
+    try { localStorage.setItem("careerpilot_search_history", JSON.stringify(state.searchHistory)); } catch (e) {}
   }
 
   function bindCompanySearch() {
@@ -467,6 +533,86 @@
     if (nameInput) nameInput.addEventListener("keydown", function (e) { if (e.key === "Enter") run(); });
   }
 
+  function bindSearchResultsActions() {
+    var addAll = el("addSearchAll");
+    if (addAll) addAll.addEventListener("click", addSearchResultsToLibrary);
+    var clearBtn = el("clearSearchResults");
+    if (clearBtn) clearBtn.addEventListener("click", clearSearchResults);
+    document.querySelectorAll("[data-add-search]").forEach(function (button) {
+      button.addEventListener("click", function () { addSearchResult(Number(button.getAttribute("data-add-search"))); });
+    });
+    document.querySelectorAll("[data-undo-search]").forEach(function (button) {
+      button.addEventListener("click", function () { undoSearchResult(Number(button.getAttribute("data-undo-search"))); });
+    });
+  }
+
+  function clearSearchResults() {
+    state.searchResults = [];
+    state.searchSkipped = [];
+    state.searchMode = null;
+    state.searchKeyword = "";
+    renderJobs();
+  }
+
+  async function addSearchResultsToLibrary() {
+    var pending = (state.searchResults || []).filter(function (job) { return job && job.source === "local" && !job.saved_job_id; });
+    if (!pending.length) { toast("结果都已加入岗位库", "info"); return; }
+    var btn = el("addSearchAll");
+    if (btn) { btn.disabled = true; btn.textContent = "正在加入…"; }
+    var added = 0, failed = 0;
+    for (var i = 0; i < pending.length; i++) {
+      var job = pending[i];
+      try {
+        var saved = await saveSearchJob(job);
+        job.saved_job_id = saved.id;
+        job.addedThisSearch = true;
+        added++;
+      } catch (e) {
+        failed++;
+        console.warn("加入岗位失败", job.title, e);
+      }
+    }
+    if (btn) { btn.disabled = false; btn.textContent = "全部加入岗位库"; }
+    await loadJobs();
+    renderJobs();
+    toast(failed ? "已加入 " + added + " 个，" + failed + " 个失败" : "已全部加入岗位库（" + added + " 个）", failed ? "warn" : "success");
+  }
+
+  function saveSearchJob(job) {
+    return api("jobs", { method: "POST", body: {
+      title: job.title || "未命名岗位", company: job.company || "未知公司", city: job.city || "",
+      posting_type: job.posting_type || "未知", work_type: job.work_type || "全职", salary: job.salary || "",
+      deadline: job.deadline || "", tags: Array.isArray(job.tags) ? job.tags : [], url: job.url || "",
+      description: job.description || "", requirements: Array.isArray(job.requirements) ? job.requirements : [], source: "local"
+    }});
+  }
+
+  async function addSearchResult(index) {
+    var job = state.searchResults[index];
+    if (!job || job.saved_job_id) return;
+    try {
+      var saved = await saveSearchJob(job);
+      job.saved_job_id = saved.id;
+      job.addedThisSearch = true;
+      await loadJobs();
+      renderJobs();
+      toast("已加入岗位库", "success");
+    } catch (e) { toast("加入失败：" + e.message, "error"); }
+  }
+
+  async function undoSearchResult(index) {
+    var job = state.searchResults[index];
+    if (!job || !job.addedThisSearch || !job.saved_job_id) return;
+    try {
+      await api("jobs/" + encodeURIComponent(job.saved_job_id), { method: "DELETE" });
+      job.saved_job_id = null;
+      job.addedThisSearch = false;
+      await loadJobs();
+      renderJobs();
+      toast("已撤销加入", "success");
+    } catch (e) { toast("撤销失败：" + e.message, "error"); }
+  }
+
   function bindJobParse() {
     var input = el("jobUrlInput");
     var btn = el("jobUrlParse");
@@ -481,7 +627,6 @@
       status.innerHTML = '<div class="resume-loading">正在抓取页面并提取岗位要求…</div>';
       btn.disabled = true;
       api("jobs/parse", { method: "POST", body: { url: url } }).then(function (data) {
-        btn.disabled = false;
         status.innerHTML = "";
         state.selectedJobId = data.data.id;
         return loadJobs().then(function () {
@@ -489,9 +634,8 @@
           toast("岗位解析成功，已加入岗位库", "success");
         });
       }).catch(function (e) {
-        btn.disabled = false;
         status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
-      });
+      }).finally(function () { btn.disabled = false; });
     };
     btn.addEventListener("click", run);
     input.addEventListener("keydown", function (e) { if (e.key === "Enter") run(); });
@@ -566,7 +710,7 @@
   }
 
   function bindJobItems() {
-    document.querySelectorAll(".job-item[data-job]").forEach(function (item) {
+    document.querySelectorAll(".job-item[data-job]:not([data-search-result])").forEach(function (item) {
       item.addEventListener("click", function () {
         state.selectedJobId = item.getAttribute("data-job");
         if (state.view === "jobs") renderJobs();
@@ -613,12 +757,53 @@
       '<div class="modal modal-wide">' +
       '<div class="modal-head"><strong>' + esc(title) + "</strong>" +
       '<div class="flex"><a class="btn btn-sm" href="/api/documents/download/' + docId + '">下载 Markdown</a>' +
+      '<a class="btn btn-sm btn-primary" href="/api/documents/pdf/' + docId + '">下载 PDF</a>' +
+      '<button class="btn btn-sm" id="printDocument">打印 / 另存为 PDF</button>' +
       '<button class="icon-btn modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div>' +
       '<div class="modal-body" style="max-height:72vh;overflow-y:auto"><div class="doc-preview">' + renderMarkdown(content) + "</div></div>" +
       "</div>";
     overlay.querySelector(".modal-close").addEventListener("click", function () { overlay.remove(); });
+    overlay.querySelector("#printDocument").addEventListener("click", function () { printDocument(content, title); });
     overlay.addEventListener("click", function (e) { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
+  }
+
+  function markdownToPrintHtml(content) {
+    var lines = String(content || "").split(/\r?\n/), out = [], inList = false;
+    function closeList() { if (inList) { out.push("</ul>"); inList = false; } }
+    lines.forEach(function (line) {
+      var heading = line.match(/^(#{1,3})\s+(.+)$/);
+      var bullet = line.match(/^\s*(?:[-*·])\s*(.+)$/);
+      if (heading) {
+        closeList();
+        out.push("<h" + heading[1].length + ">" + esc(heading[2]).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>") + "</h" + heading[1].length + ">");
+      } else if (bullet) {
+        if (!inList) { out.push("<ul>"); inList = true; }
+        out.push("<li>" + esc(bullet[1]).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>") + "</li>");
+      } else {
+        closeList();
+        if (line.trim()) out.push("<p>" + esc(line).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>") + "</p>");
+      }
+    });
+    closeList();
+    return out.join("");
+  }
+
+  function printDocument(content, title) {
+    if (!content) { toast("暂无可打印内容", "error"); return; }
+    var frame = document.createElement("iframe");
+    frame.id = "printFrame";
+    frame.setAttribute("title", "打印文档");
+    frame.style.cssText = "position:fixed;width:1px;height:1px;right:0;bottom:0;border:0;opacity:0";
+    document.body.appendChild(frame);
+    var doc = frame.contentDocument;
+    doc.open();
+    doc.write('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>@page{size:A4;margin:0}body{box-sizing:border-box;width:210mm;min-height:297mm;margin:0 auto;padding:18mm;font-family:"PingFang SC","Microsoft YaHei",sans-serif;color:#202124;font-size:11pt;line-height:1.7}h1{font-size:22pt;text-align:center;margin:0 0 10mm}h2{font-size:15pt;border-bottom:1px solid #bbb;padding-bottom:2mm;margin:7mm 0 3mm}h3{font-size:12pt;margin:5mm 0 2mm}p{margin:1.5mm 0}ul{margin:1.5mm 0;padding-left:6mm}li{margin:1mm 0}strong{font-weight:700}@media print{body{margin:0}}</style></head><body>' + markdownToPrintHtml(content) + "</body></html>");
+    doc.close();
+    var cleanup = function () { if (frame.parentNode) frame.remove(); };
+    frame.contentWindow.onafterprint = cleanup;
+    setTimeout(function () { frame.contentWindow.focus(); frame.contentWindow.print(); }, 100);
+    setTimeout(cleanup, 60000);
   }
 
   async function deleteJob(job) {
@@ -769,7 +954,7 @@
       '<div class="panel-body">' +
       '<div class="upload-zone" id="uploadZone"><input type="file" id="resumeFile" accept=".pdf,.docx,.txt,.md" hidden>' +
       '<strong>点击选择或拖拽简历文件</strong><span class="muted">识别学校、专业、毕业时间、实习、项目、技能；每项须你确认后才写入</span></div>' +
-      '<div id="resumeImportStatus" class="mt-8"></div>' +
+      '<div id="resumeImportStatus" class="mt-8" role="status" aria-live="polite" aria-atomic="true"></div>' +
       "</div></div>" +
       '<div id="resumeSummaryPanel"></div>' +
       '<div id="resumeMergePanel"></div>' +
@@ -852,7 +1037,10 @@
     }
     var form = new FormData();
     form.append("file", file);
-    status.innerHTML = '<div class="resume-loading">正在解析并识别简历…</div>';
+    var zone = el("uploadZone"), input = el("resumeFile");
+    if (zone) { zone.style.pointerEvents = "none"; zone.setAttribute("aria-busy", "true"); }
+    if (input) input.disabled = true;
+    status.innerHTML = '<div class="resume-loading">正在解析并识别简历，请勿关闭页面…</div>';
     try {
       var resp = await fetch("/api/profile/resume-import", {
         method: "POST",
@@ -867,6 +1055,9 @@
       toast("简历解析完成，可一键填入核心字段", "success");
     } catch (e) {
       status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
+    } finally {
+      if (zone) { zone.style.pointerEvents = ""; zone.removeAttribute("aria-busy"); }
+      if (input) { input.disabled = false; input.value = ""; }
     }
   }
 
@@ -1184,10 +1375,38 @@
   }
 
   async function loadJobs() {
-    state.jobs = await api("jobs");
+    var data = await api("jobs?" + jobQuery(0));
+    state.jobs = data.jobs || [];
+    state.jobsTotal = Number(data.total || state.jobs.length);
+    state.jobFacets = data.facets || state.jobFacets;
     var badge = el("jobsBadge");
     var count = state.jobs.filter(function (j) { return (j.evaluation || {}).overall >= 75; }).length;
     badge.textContent = count || "0";
+  }
+
+  function jobQuery(offset) {
+    var params = new URLSearchParams({ limit: "20", offset: String(offset || 0), sort: state.jobSort || "score" });
+    if (state.jobFilter) params.set("q", state.jobFilter);
+    if (state.jobCityFilter) params.set("city", state.jobCityFilter);
+    if (state.jobTypeFilter) params.set("type", state.jobTypeFilter);
+    if (state.jobSourceFilter) params.set("source", state.jobSourceFilter);
+    if (state.jobDeadlineFilter) params.set("deadline", state.jobDeadlineFilter);
+    return params.toString();
+  }
+
+  async function loadMoreJobs() {
+    var btn = el("loadMoreJobs");
+    if (btn) { btn.disabled = true; btn.textContent = "加载中…"; }
+    try {
+      var data = await api("jobs?" + jobQuery(state.jobs.length));
+      var known = new Set(state.jobs.map(function (job) { return job.id; }));
+      (data.jobs || []).forEach(function (job) { if (!known.has(job.id)) state.jobs.push(job); });
+      state.jobsTotal = Number(data.total || state.jobs.length);
+      renderJobs();
+    } catch (e) {
+      toast("加载岗位失败：" + e.message, "error");
+      if (btn) { btn.disabled = false; btn.textContent = "重新加载"; }
+    }
   }
 
   async function loadApplications() {

@@ -518,6 +518,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
 }
 .toast.error { background: var(--danger); }
 .toast.success { background: var(--good); }
+.toast.info { background: var(--info); }
+.toast.warn { background: var(--warn); }
 @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 /* Empty state */
@@ -763,4 +765,27 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
   .resume-summary-avatar { flex-basis: 44px; width: 44px; height: 44px; font-size: 19px; }
   .resume-summary-actions { flex-direction: column; }
   .resume-summary-actions .btn { width: 100%; }
+  .page-head { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .page-actions, .detail-actions, .modal-head .flex { width: 100%; flex-wrap: wrap; }
+  .page-actions .btn, .detail-actions .btn { flex: 1 1 140px; }
+  .modal-overlay { padding: 8px; align-items: flex-start; }
+  .modal, .modal-wide { width: 100%; max-height: calc(100vh - 16px); border-radius: 6px; }
+  .modal-head { padding: 12px; gap: 8px; align-items: flex-start; }
+  .modal-head strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .modal-body { padding: 12px; }
+  .job-parse-bar .flex > input { min-width: 0 !important; width: 100% !important; flex: 1 1 100% !important; }
+  .job-parse-bar .flex > .btn { flex: 1 1 auto; }
+  .row-meta { max-width: 42%; flex-wrap: wrap; justify-content: flex-end; }
+  .row-meta .btn { max-width: 100%; white-space: normal; height: auto; min-height: 28px; }
+  .toast-wrap { left: 12px; right: 12px; bottom: 12px; }
+  .toast { max-width: none; width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}
+
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 55%, white);
+  outline-offset: 2px;
 }

@@ -30,6 +30,7 @@ from form_extractor import extract_form
 from form_filler import build_fill_plan
 from resume_extractor import extract_profile_from_resume
 from resume_parser import extract_resume_text
+from db_backup import start_backup_scheduler
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -40,8 +41,13 @@ DB_FILE = Path(os.environ.get("DB_PATH", str(DATA_DIR / "careerpilot.db")))
 
 SESSION_MAX_AGE_DAYS = int(os.environ.get("SESSION_MAX_AGE_DAYS", "7"))
 SESSION_COOKIE = "careerpilot_session"
+MAX_JSON_BODY_BYTES = int(os.environ.get("MAX_JSON_BODY_BYTES", str(1024 * 1024)))
+LOGIN_RATE_LIMIT = int(os.environ.get("LOGIN_RATE_LIMIT", "5"))
+LOGIN_RATE_WINDOW_SECONDS = int(os.environ.get("LOGIN_RATE_WINDOW_SECONDS", "900"))
 
 _DB_LOCK = threading.RLock()
+_LOGIN_LOCK = threading.Lock()
+_LOGIN_FAILURES = {}
 
 
 def _utf8(path):
@@ -269,6 +275,30 @@ def verify_password(password, stored):
         return False
 
 
+def login_rate_status(key, now=None):
+    now = now or time.time()
+    with _LOGIN_LOCK:
+        attempts = [stamp for stamp in _LOGIN_FAILURES.get(key, []) if now - stamp < LOGIN_RATE_WINDOW_SECONDS]
+        if attempts:
+            _LOGIN_FAILURES[key] = attempts
+        else:
+            _LOGIN_FAILURES.pop(key, None)
+        return max(1, int(LOGIN_RATE_WINDOW_SECONDS - (now - attempts[0]))) if len(attempts) >= LOGIN_RATE_LIMIT else 0
+
+
+def record_login_failure(key, now=None):
+    now = now or time.time()
+    with _LOGIN_LOCK:
+        attempts = [stamp for stamp in _LOGIN_FAILURES.get(key, []) if now - stamp < LOGIN_RATE_WINDOW_SECONDS]
+        attempts.append(now)
+        _LOGIN_FAILURES[key] = attempts
+
+
+def clear_login_failures(key):
+    with _LOGIN_LOCK:
+        _LOGIN_FAILURES.pop(key, None)
+
+
 def create_session(user_id, max_age=None):
     token = secrets.token_urlsafe(32)
     expires = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + (max_age or SESSION_MAX_AGE_DAYS * 86400)))
@@ -385,12 +415,70 @@ def get_job(job_id):
         return job_row_to_dict(row) if row else None
 
 
-def list_jobs():
+def list_jobs(limit=None, offset=0):
     with _DB_LOCK:
         conn = db()
-        rows = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC, id DESC").fetchall()
+        sql = "SELECT * FROM jobs ORDER BY created_at DESC, id DESC"
+        params = ()
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params = (limit, offset)
+        rows = conn.execute(sql, params).fetchall()
         conn.close()
         return [job_row_to_dict(r) for r in rows]
+
+
+def count_jobs():
+    with _DB_LOCK:
+        conn = db()
+        total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        conn.close()
+        return total
+
+
+def job_facets(jobs):
+    return {
+        "cities": sorted({job.get("city", "") for job in jobs if job.get("city")}),
+        "types": sorted({value for job in jobs for value in (job.get("posting_type"), job.get("work_type")) if value}),
+    }
+
+
+def filter_jobs(jobs, query):
+    keyword = (query.get("q", [""])[0] or "").strip().lower()
+    city = (query.get("city", [""])[0] or "").strip()
+    job_type = (query.get("type", [""])[0] or "").strip()
+    source = (query.get("source", [""])[0] or "").strip()
+    deadline_days = (query.get("deadline", [""])[0] or "").strip()
+    if keyword:
+        jobs = [job for job in jobs if keyword in " ".join((job.get("title", ""), job.get("company", ""), job.get("city", ""), " ".join(job.get("tags", [])), job.get("description", ""))).lower()]
+    if city:
+        jobs = [job for job in jobs if job.get("city") == city]
+    if job_type:
+        jobs = [job for job in jobs if job.get("posting_type") == job_type or job.get("work_type") == job_type]
+    if source == "demo":
+        jobs = [job for job in jobs if job.get("is_demo")]
+    elif source == "local":
+        jobs = [job for job in jobs if not job.get("is_demo") and job.get("source") == "local"]
+    elif source == "llm":
+        jobs = [job for job in jobs if not job.get("is_demo") and job.get("source") == "llm_suggested"]
+    elif source == "web":
+        jobs = [job for job in jobs if not job.get("is_demo") and job.get("source") not in ("local", "llm_suggested")]
+    if deadline_days:
+        try:
+            cutoff = time.strftime("%Y-%m-%d", time.localtime(time.time() + max(int(deadline_days), 0) * 86400))
+            jobs = [job for job in jobs if job.get("deadline") and job["deadline"] <= cutoff]
+        except ValueError:
+            pass
+    return jobs
+
+
+def mark_saved_search_results(results):
+    saved_jobs = list_jobs()
+    output = []
+    for item in results:
+        saved = next((job for job in saved_jobs if (item.get("id") and job["id"] == item["id"]) or (item.get("url") and job.get("url") == item["url"]) or (job.get("title") == item.get("title") and job.get("company") == item.get("company"))), None)
+        output.append({**item, "saved_job_id": saved["id"] if saved else None})
+    return output
 
 
 def add_job(job):
@@ -1064,6 +1152,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         if set_cookie:
             self.send_header("Set-Cookie", set_cookie)
         if extra:
@@ -1081,6 +1173,18 @@ class Handler(BaseHTTPRequestHandler):
             return json.loads(raw.decode("utf-8"))
         except Exception:
             return {}
+
+    def _reject_oversized_body(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._send(400, {"ok": False, "error": "Content-Length 无效"})
+            return True
+        content_type = self.headers.get("Content-Type", "").lower()
+        if "multipart/form-data" not in content_type and length > MAX_JSON_BODY_BYTES:
+            self._send(413, {"ok": False, "error": "请求体超过 1MB 上限"})
+            return True
+        return False
 
     def _multipart_file(self):
         content_type = self.headers.get("Content-Type", "")
@@ -1235,19 +1339,19 @@ class Handler(BaseHTTPRequestHandler):
             rel = "index.html"
         target = (STATIC_DIR / rel).resolve()
         if not str(target).startswith(str(STATIC_DIR.resolve())):
-            self._send(403, {"error": "forbidden"})
+            self._send(403, {"ok": False, "error": "forbidden"})
             return
         if target.is_dir():
             target = target / "index.html"
         if not target.exists():
-            self._send(404, {"error": "not found"})
+            self._send(404, {"ok": False, "error": "not found"})
             return
         content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         self._send(200, target.read_bytes(), content_type=content_type, extra={"Cache-Control": "no-cache"})
 
     def _api(self, method, parts):
         if not parts:
-            self._send(404, {"error": "not found"})
+            self._send(404, {"ok": False, "error": "not found"})
             return
         head = parts[0]
 
@@ -1309,7 +1413,19 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if head == "jobs" and len(parts) == 1 and method == "GET":
-            jobs = list_jobs()
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            limit = None
+            offset = 0
+            try:
+                if "limit" in query:
+                    limit = min(max(int(query["limit"][0]), 1), 100)
+                offset = max(int(query.get("offset", [0])[0]), 0)
+            except (TypeError, ValueError):
+                self._send(400, {"ok": False, "error": "limit/offset 必须是整数"})
+                return
+            all_jobs = list_jobs()
+            facets = job_facets(all_jobs)
+            jobs = filter_jobs(all_jobs, query)
             results = []
             for job in jobs:
                 ev = get_evaluation(user["id"], job["id"])
@@ -1317,7 +1433,17 @@ class Handler(BaseHTTPRequestHandler):
                     ev = score_job(job, json.loads(user.get("profile_json") or "{}"))
                     save_evaluation(user["id"], ev)
                 results.append({**job, "evaluation": ev})
-            self._send(200, results)
+            sort = query.get("sort", ["new"])[0]
+            if sort == "deadline":
+                results.sort(key=lambda job: job.get("deadline") or "9999-12-31")
+            elif sort == "new":
+                results.sort(key=lambda job: (job.get("created_at") or "", job.get("id") or ""), reverse=True)
+            else:
+                results.sort(key=lambda job: (job.get("evaluation") or {}).get("overall", 0), reverse=True)
+            total = len(results)
+            if limit is not None:
+                results = results[offset:offset + limit]
+            self._send(200, {"jobs": results, "total": total, "facets": facets} if limit is not None else results)
             return
 
         if head=="jobs" and len(parts)>=3 and parts[1]=="search" and parts[2]=="company" and method=="POST":
@@ -1342,12 +1468,12 @@ class Handler(BaseHTTPRequestHandler):
             s=load_settings(); self._send(200,{"ok":True,"data":{"enabled":bool(s.get("enabled") and s.get("api_key") and s.get("base_url")),"provider":s.get("provider","custom"),"model":s.get("model",""),"has_key":bool(s.get("api_key"))}}); return
         if head=="jobs" and len(parts)==2 and parts[1]=="search" and method=="POST":
             query=self._json_body(); s=load_settings(); enabled=bool(s.get("enabled") and s.get("api_key") and s.get("base_url")); results=search_jobs(query,s)
-            if not enabled: self._send(200,{"ok":True,"data":[],"local_results":results,"mode":"local","hint":"请在设置中开启 AI 模式以使用联网搜索"}); return
+            if not enabled: self._send(200,{"ok":True,"data":[],"local_results":mark_saved_search_results(results),"mode":"local","hint":"请在设置中开启 AI 模式以使用联网搜索"}); return
             profile=json.loads(user.get("profile_json") or "{}"); output=[]
             for item in results:
                 if item.get("source")=="local": continue
                 job=get_job(add_job(item)); ev=score_job(job,profile); save_evaluation(user["id"],ev); output.append({**job,"evaluation":ev})
-            self._send(200,{"ok":True,"data":output,"mode":"llm","hint":"以下为 LLM 建议，投递前请人工核实链接。"}); return
+            self._send(200,{"ok":True,"data":mark_saved_search_results(output),"local_results":mark_saved_search_results([item for item in results if item.get("source")=="local"]),"mode":"llm","hint":"以下为 LLM 建议，投递前请人工核实链接。"}); return
 
         if head == "jobs" and len(parts) >= 2 and parts[1] == "parse" and method == "POST":
             body = self._json_body()
@@ -1385,7 +1511,7 @@ class Handler(BaseHTTPRequestHandler):
         if head == "jobs" and method == "POST":
             body = self._json_body()
             if not body.get("title"):
-                self._send(400, {"error": "缺少岗位名称"})
+                self._send(400, {"ok": False, "error": "缺少岗位名称"})
                 return
             job_id = add_job(body)
             job = get_job(job_id)
@@ -1398,7 +1524,7 @@ class Handler(BaseHTTPRequestHandler):
             job_id = parts[1]
             job = get_job(job_id)
             if not job:
-                self._send(404, {"error": "岗位不存在"})
+                self._send(404, {"ok": False, "error": "岗位不存在"})
                 return
             if method == "GET":
                 ev = get_evaluation(user["id"], job_id) or score_job(job, json.loads(user.get("profile_json") or "{}"))
@@ -1421,7 +1547,7 @@ class Handler(BaseHTTPRequestHandler):
             kind = body.get("kind")
             job = get_job(job_id) if job_id else None
             if not job:
-                self._send(404, {"error": "岗位不存在"})
+                self._send(404, {"ok": False, "error": "岗位不存在"})
                 return
             profile = json.loads(user.get("profile_json") or "{}")
             if kind == "resume":
@@ -1429,7 +1555,7 @@ class Handler(BaseHTTPRequestHandler):
             elif kind == "cover_letter":
                 content = generate_cover_letter(job, profile)
             else:
-                self._send(400, {"error": "kind 必须是 resume 或 cover_letter"})
+                self._send(400, {"ok": False, "error": "kind 必须是 resume 或 cover_letter"})
                 return
             with _DB_LOCK:
                 conn = db()
@@ -1443,11 +1569,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"id": doc_id, "job_id": job_id, "kind": kind, "content": content})
             return
 
-        if head == "documents" and len(parts) >= 3 and parts[1] == "download":
+        if head == "documents" and len(parts) >= 3 and parts[1] in ("download", "pdf"):
             try:
                 doc_id = int(parts[2])
             except ValueError:
-                self._send(400, {"error": "bad id"})
+                self._send(400, {"ok": False, "error": "bad id"})
                 return
             with _DB_LOCK:
                 conn = db()
@@ -1457,14 +1583,25 @@ class Handler(BaseHTTPRequestHandler):
                 ).fetchone()
                 conn.close()
             if not row:
-                self._send(404, {"error": "文档不存在"})
+                self._send(404, {"ok": False, "error": "文档不存在"})
                 return
             job = get_job(row["job_id"]) or {}
-            filename = f"{job.get('company', 'company')}_{job.get('title', 'role')}_{row['kind']}.md"
+            is_pdf = parts[1] == "pdf"
+            suffix = "pdf" if is_pdf else "md"
+            filename = f"{job.get('company', 'company')}_{job.get('title', 'role')}_{row['kind']}.{suffix}"
+            if is_pdf:
+                try:
+                    from pdf_exporter import render_document_pdf
+                    body = render_document_pdf(row["content"], filename[:-4])
+                except ImportError:
+                    self._send(503, {"ok": False, "error": "PDF 组件尚未安装，请重新安装 requirements.txt 并重启服务"})
+                    return
+            else:
+                body = row["content"]
             self._send(
                 200,
-                row["content"],
-                content_type="text/markdown; charset=utf-8",
+                body,
+                content_type="application/pdf" if is_pdf else "text/markdown; charset=utf-8",
                 extra={
                     "Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(filename)}"
                 },
@@ -1487,7 +1624,7 @@ class Handler(BaseHTTPRequestHandler):
             job_id = body.get("job_id")
             job = get_job(job_id) if job_id else None
             if not job:
-                self._send(404, {"error": "岗位不存在"})
+                self._send(404, {"ok": False, "error": "岗位不存在"})
                 return
             stage = body.get("stage", "已收藏")
             now = time.strftime("%Y-%m-%d %H:%M")
@@ -1537,7 +1674,7 @@ class Handler(BaseHTTPRequestHandler):
                 ).fetchone()
                 if not row:
                     conn.close()
-                    self._send(403, {"error": "无权访问该记录"})
+                    self._send(403, {"ok": False, "error": "无权访问该记录"})
                     return
                 body = self._json_body()
                 stage = body.get("stage", row["stage"])
@@ -1559,7 +1696,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self._json_body()
             job = get_job(body.get("job_id", ""))
             if not job:
-                self._send(404, {"error": "岗位不存在"})
+                self._send(404, {"ok": False, "error": "岗位不存在"})
                 return
             profile = json.loads(user.get("profile_json") or "{}")
             content = generate_interview_prep(job, profile)
@@ -1579,7 +1716,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self._json_body()
             user_text = (body.get("message") or "").strip()
             if not user_text:
-                self._send(400, {"error": "消息为空"})
+                self._send(400, {"ok": False, "error": "消息为空"})
                 return
             now = time.strftime("%Y-%m-%d %H:%M")
             profile = json.loads(user.get("profile_json") or "{}")
@@ -1610,7 +1747,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, [dict(r) for r in reversed(rows)])
             return
 
-        self._send(404, {"error": "not found"})
+        self._send(404, {"ok": False, "error": "not found"})
 
     def _api_auth(self, method, parts):
         action = parts[0] if parts else ""
@@ -1651,13 +1788,20 @@ class Handler(BaseHTTPRequestHandler):
             body = self._json_body()
             username = (body.get("username") or "").strip()
             password = body.get("password") or ""
+            rate_key = (self.client_address[0], username.lower())
+            retry_after = login_rate_status(rate_key)
+            if retry_after:
+                self._send(429, {"ok": False, "error": "登录尝试过多，请稍后再试"}, extra={"Retry-After": str(retry_after)})
+                return
             with _DB_LOCK:
                 conn = db()
                 row = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
                 conn.close()
             if not row or not row["password_hash"] or not verify_password(password, row["password_hash"]):
+                record_login_failure(rate_key)
                 self._send(400, {"ok": False, "error": "用户名或密码错误"})
                 return
+            clear_login_failures(rate_key)
             remember=bool(body.get("remember",True)); token = create_session(row["id"],2592000 if remember else None)
             user = user_public(get_user_by_token(token))
             self._send(200, {"ok": True, "user": user}, set_cookie=self._session_cookie(token,remember))
@@ -1739,29 +1883,35 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_static(path)
 
     def do_POST(self):
+        if self._reject_oversized_body():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         if path.startswith("/api/"):
             parts = path[len("/api/"):].strip("/").split("/")
             self._api("POST", parts)
         else:
-            self._send(404, {"error": "not found"})
+            self._send(404, {"ok": False, "error": "not found"})
 
     def do_PUT(self):
+        if self._reject_oversized_body():
+            return
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path.startswith("/api/"):
             parts = parsed.path[len("/api/"):].strip("/").split("/")
             self._api("PUT", parts)
         else:
-            self._send(404, {"error": "not found"})
+            self._send(404, {"ok": False, "error": "not found"})
 
     def do_PATCH(self):
+        if self._reject_oversized_body():
+            return
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path.startswith("/api/"):
             parts = parsed.path[len("/api/"):].strip("/").split("/")
             self._api("PATCH", parts)
         else:
-            self._send(404, {"error": "not found"})
+            self._send(404, {"ok": False, "error": "not found"})
 
     def do_DELETE(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -1769,7 +1919,7 @@ class Handler(BaseHTTPRequestHandler):
             parts = parsed.path[len("/api/"):].strip("/").split("/")
             self._api("DELETE", parts)
         else:
-            self._send(404, {"error": "not found"})
+            self._send(404, {"ok": False, "error": "not found"})
 
 
 def main():
@@ -1779,6 +1929,13 @@ def main():
     args = parser.parse_args()
 
     init_db()
+    if os.environ.get("BACKUP_ENABLED", "1") == "1":
+        start_backup_scheduler(
+            DB_FILE,
+            Path(os.environ.get("BACKUP_DIR", str(DB_FILE.parent / "backups"))),
+            float(os.environ.get("BACKUP_INTERVAL_HOURS", "24")),
+            int(os.environ.get("BACKUP_RETENTION", "14")),
+        )
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"CareerPilot Web 已启动：http://{args.host}:{args.port}")
     print("按 Ctrl+C 停止服务。")

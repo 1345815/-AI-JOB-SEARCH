@@ -1,5 +1,6 @@
 """岗位网址解析：抓取页面 → 抽取岗位信息。"""
 
+import ipaddress
 import re
 import socket
 import time
@@ -41,17 +42,30 @@ class _TextExtractor(HTMLParser):
         return re.sub(r"\n{2,}", "\n", raw).strip()
 
 
-def _block_ssrf(url):
-    host = urllib.parse.urlparse(url).hostname or ""
-    if host in ("localhost", "127.0.0.1", "::1"):
-        raise ValueError("不支持解析本地地址")
-    if host.startswith("192.168.") or host.startswith("10.") or host.startswith("172."):
-        raise ValueError("不支持解析内网地址")
-    return True
+def validate_public_url(url):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("仅支持不含凭据的 HTTP/HTTPS 公网链接")
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)}
+    except socket.gaierror as exc:
+        raise ValueError("岗位链接域名无法解析") from exc
+    if not addresses:
+        raise ValueError("岗位链接域名没有可用地址")
+    for address in addresses:
+        if not ipaddress.ip_address(address.split("%", 1)[0]).is_global:
+            raise ValueError("禁止访问本机、内网或保留网络地址")
+    return url
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_public_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def fetch_url_text(url):
-    _block_ssrf(url)
+    validate_public_url(url)
     req = urllib.request.Request(
         url,
         headers={
@@ -62,7 +76,7 @@ def fetch_url_text(url):
             "Accept-Language": "zh-CN,zh;q=0.9",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.build_opener(_SafeRedirectHandler()).open(req, timeout=30) as resp:
         raw = resp.read(2 * 1024 * 1024)
     for encoding in ("utf-8", "gbk", "gb18030"):
         try:

@@ -72,6 +72,22 @@ def _source(value):
     return _clean_line(value)[:260]
 
 
+def _extract_major_heuristic(context):
+    value = re.sub(r"[（(][^）)]*[）)]", " ", context)
+    value = re.sub(r"[\u4e00-\u9fa5A-Za-z]{2,40}(?:大学|学院|学校|University|College)", " ", value, flags=re.I)
+    value = re.sub(r"本科|硕士(?:研究生)?|博士(?:研究生)?|大专|专科|学士", " ", value)
+    period = _period(value)
+    if period:
+        value = value.replace(period, " ")
+    value = re.sub(r"(?:19|20)\d{2}(?:[.年/-]\d{1,2})?", " ", value)
+    excluded = re.compile(r"^(?:" + _CITIES + r"|全日制|统招|在校|学习|毕业|就读|就读于|获得)$")
+    for candidate in re.split(r"[\s|｜,，;；:：、]+", value):
+        candidate = candidate.strip("-—–.。()（）")
+        if 2 <= len(candidate) <= 12 and re.fullmatch(r"[\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z+\-/]*", candidate) and not excluded.fullmatch(candidate) and not re.search(r"[年月日]", candidate):
+            return candidate
+    return ""
+
+
 def _extract_education(lines, section):
     education, sources = [], []
     candidates = section or lines
@@ -83,7 +99,8 @@ def _extract_education(lines, section):
         school = school_match.group(1)
         degree = re.search(r"(本科|硕士(?:研究生)?|博士(?:研究生)?|大专|专科|学士)", context)
         major = re.search(r"(?:专业|主修)\s*[:：]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z、/（）()\- ]{1,30})", context)
-        entry = {"school": school, "degree": degree.group(1) if degree else "", "period": _period(context), "detail": (major.group(1).strip(" |｜,，") if major else "")[:60]}
+        detail = major.group(1).strip(" |｜,，") if major else _extract_major_heuristic(context)
+        entry = {"school": school, "degree": degree.group(1) if degree else "", "period": _period(context), "detail": detail[:60]}
         if not any(item["school"] == school for item in education):
             education.append(entry)
             sources.append(context)
@@ -173,7 +190,7 @@ def _local_extract(text):
     skills, skill_source = _extract_skills(lines, sections["skills"])
     if skills:
         extracted["skills"] = {"strong": skills, "moderate": [], "weak": []}; confidence["skills.strong"] = "high" if sections["skills"] else "low"; sources["skills.strong"] = skill_source
-    english = re.search(r"(?:CET[- ]?[46]|大学英语[四六]级|雅思\s*\d(?:\.\d)?|托福\s*\d{2,3})", text, re.I)
+    english = re.search(r"(?:CET[- ]?[46]|大学英语[四六]级|英语[四六46]级|英语四六级|雅思\s*\d(?:\.\d)?|托福\s*\d{2,3})", text, re.I)
     if english:
         extracted["english_level"] = english.group(0).upper().replace(" ", ""); confidence["english_level"] = "high"; sources["english_level"] = _source(english.group(0))
     certificates = [line for line in sections["certifications"] if re.search(r"CET|雅思|托福|证书|资格", line, re.I)]
