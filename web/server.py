@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from profile_merger import apply_paths, build_merge_plan
-from job_extractor import extract_job_from_url, search_jobs
+from job_extractor import extract_job_from_url, search_jobs, search_company_jobs
 from form_extractor import extract_form
 from form_filler import build_fill_plan
 from resume_extractor import extract_profile_from_resume
@@ -1181,6 +1181,7 @@ class Handler(BaseHTTPRequestHandler):
                         if path in sources:
                             item["source_text"] = sources[path]
                 plan["unrecognized"] = result.get("unrecognized", [])
+                plan["summary"] = result.get("summary", {})
                 with _DB_LOCK:
                     conn = db()
                     conn.execute(
@@ -1319,9 +1320,27 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, results)
             return
 
-        if head=="jobs" and len(parts)>1 and parts[1]=="search" and method=="GET":
+        if head=="jobs" and len(parts)>=3 and parts[1]=="search" and parts[2]=="company" and method=="POST":
+            body=self._json_body(); company=(body.get("company") or "").strip(); s=load_settings()
+            enabled=bool(s.get("enabled") and s.get("api_key") and s.get("base_url"))
+            if not company: self._send(400,{"ok":False,"error":"缺少公司名"}); return
+            if not enabled: self._send(200,{"ok":True,"data":[],"skipped":[],"mode":"local","hint":"请在设置中开启 AI 模式以使用联网搜索"}); return
+            city=(body.get("city") or "").strip(); limit=min(max(int(body.get("limit",8)),1),10)
+            try:
+                result=search_company_jobs(company,city,limit)
+            except Exception as exc:
+                self._send(500,{"ok":False,"error":"联网搜索失败："+str(exc)[:160]}); return
+            profile=json.loads(user.get("profile_json") or "{}"); output=[]
+            for item in result.get("jobs",[]):
+                try:
+                    job=get_job(add_job(item)); ev=score_job(job,profile); save_evaluation(user["id"],ev)
+                    output.append({**job,"evaluation":ev})
+                except Exception: continue
+            self._send(200,{"ok":True,"data":output,"skipped":result.get("skipped",[]),"cached":bool(result.get("cached")),"hint":"已从真实招聘页面抓取岗位，投递前仍建议人工核实链接。"}); return
+
+        if head=="jobs" and len(parts)==2 and parts[1]=="search" and method=="GET":
             s=load_settings(); self._send(200,{"ok":True,"data":{"enabled":bool(s.get("enabled") and s.get("api_key") and s.get("base_url")),"provider":s.get("provider","custom"),"model":s.get("model",""),"has_key":bool(s.get("api_key"))}}); return
-        if head=="jobs" and len(parts)>1 and parts[1]=="search" and method=="POST":
+        if head=="jobs" and len(parts)==2 and parts[1]=="search" and method=="POST":
             query=self._json_body(); s=load_settings(); enabled=bool(s.get("enabled") and s.get("api_key") and s.get("base_url")); results=search_jobs(query,s)
             if not enabled: self._send(200,{"ok":True,"data":[],"local_results":results,"mode":"local","hint":"请在设置中开启 AI 模式以使用联网搜索"}); return
             profile=json.loads(user.get("profile_json") or "{}"); output=[]

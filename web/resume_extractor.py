@@ -114,11 +114,21 @@ def _extract_entries(section, kind):
 
 def _extract_skills(lines, section):
     content = " ".join(section) if section else " ".join(lines)
-    hints = ["Python", "Java", "Go", "C++", "SQL", "MySQL", "PostgreSQL", "Excel", "Tableau", "Power BI", "React", "Vue", "JavaScript", "TypeScript", "Figma", "Photoshop", "Axure", "PRD", "用户研究", "数据分析", "机器学习", "深度学习", "大模型", "LLM", "Prompt", "项目管理", "运营", "英语"]
+    hints = [
+        "Python", "Java", "Go", "C++", "C#", "SQL", "MySQL", "PostgreSQL",
+        "Excel", "Tableau", "Power BI", "React", "Vue", "JavaScript",
+        "TypeScript", "Unity", "Godot", "Unreal", "Agent", "RAG",
+        "LangChain", "Coze", "Dify", "ComfyUI", "Stable Diffusion",
+        "Blender", "Figma", "Photoshop", "Axure", "PRD", "竞品分析",
+        "用户访谈", "AB测试", "A/B测试", "短视频", "私域", "投放",
+        "用户研究", "数据分析", "机器学习", "深度学习", "大模型", "LLM",
+        "Prompt", "项目管理", "运营", "英语",
+    ]
     skills = [hint for hint in hints if re.search(re.escape(hint), content, re.I)]
     for line in section:
         if "：" in line or ":" in line:
             skills.extend(re.split(r"[,，;；、/|｜]", re.split(r"[:：]", line, maxsplit=1)[1]))
+        skills.extend(re.split(r"[、,，]", line))
     cleaned = [skill for skill in _unique(skills) if 1 < len(skill) <= 24 and not re.search(r"^(熟悉|掌握|了解|具备)$", skill)]
     return cleaned[:30], _source(content)
 
@@ -176,20 +186,72 @@ def _sanitize(data):
     return {key: value for key, value in data.items() if key in PROFILE_FIELDS} if isinstance(data, dict) else {}
 
 
+_CONFIDENCE_LEVELS = {"low": 0, "medium": 1, "high": 2}
+_HIGH_CONFIDENCE_FIELDS = {"name", "phone", "email"}
+_MEDIUM_CONFIDENCE_FIELDS = {
+    "school", "highest_degree", "major", "graduation_date", "english_level",
+}
+_LOW_CONFIDENCE_FIELDS = {
+    "experiences", "projects", "skills", "certifications", "awards", "career_goals",
+}
+_SUMMARY_FIELDS = (
+    "name", "phone", "email", "school", "highest_degree", "major",
+    "graduation_date", "english_level", "status",
+)
+
+
+def _base_confidence(path):
+    root = path.split(".", 1)[0]
+    if root in _HIGH_CONFIDENCE_FIELDS:
+        return "high"
+    if root in _MEDIUM_CONFIDENCE_FIELDS:
+        return "medium"
+    if root in _LOW_CONFIDENCE_FIELDS:
+        return "low"
+    return "medium"
+
+
+def _summary(extracted):
+    return {field: extracted.get(field) or None for field in _SUMMARY_FIELDS}
+
+
 def extract_profile_from_resume(text, user_id):
     """Return a reviewable extraction; it never writes a profile directly."""
     if llm_available():
         last_error = None
         for _ in range(2):
             try:
-                system = ("你是中国校招简历信息抽取器。只输出 JSON 对象，不要解释。简历没有明确写出的信息必须为 null，禁止猜测。数字、时间和公司名原样保留。education/experiences/projects 要保留结构化条目与要点；skills 为 strong/moderate/weak 数组。字段仅限：" + ", ".join(PROFILE_FIELDS))
+                system = ("你是中国校招简历信息抽取器。只输出 JSON 对象，不要解释。简历没有明确写出的信息必须为 null，禁止猜测。数字、时间和公司名原样保留。education/experiences/projects 要保留结构化条目与要点；skills 为 strong/moderate/weak 数组。除这些档案字段外，仅额外返回 confidence_overrides 和 source_text 两个对象。confidence_overrides 的键是字段路径、值仅为 high/medium/low；只有原文明确标注该字段时才上调。source_text 的键与字段路径对应，值必须逐字引用该字段所在的一句话，不得概括或编造。档案字段仅限：" + ", ".join(PROFILE_FIELDS))
                 raw = request_json(system, "请抽取以下简历：\n\n" + text[:12000])
                 extracted = _sanitize(raw)
-                confidence = {key: "medium" for key, value in extracted.items() if value not in (None, "", [], {})}
+                paths = []
+                for key, value in extracted.items():
+                    if value in (None, "", [], {}):
+                        continue
+                    if key == "skills" and isinstance(value, dict):
+                        paths.extend("skills." + level for level, items in value.items() if items)
+                    else:
+                        paths.append(key)
+                overrides = raw.get("confidence_overrides", {})
+                overrides = overrides if isinstance(overrides, dict) else {}
+                confidence = {}
+                for path in paths:
+                    base = _base_confidence(path)
+                    override = overrides.get(path)
+                    confidence[path] = max(
+                        (base, override if override in _CONFIDENCE_LEVELS else base),
+                        key=lambda level: _CONFIDENCE_LEVELS[level],
+                    )
+                raw_sources = raw.get("source_text", {})
+                raw_sources = raw_sources if isinstance(raw_sources, dict) else {}
+                sources = {
+                    path: _clean_line(str(raw_sources[path]))[:120]
+                    for path in paths if raw_sources.get(path)
+                }
                 unrecognized = raw.get("unrecognized", []) if isinstance(raw.get("unrecognized"), list) else []
-                return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": {key: "AI 已从简历原文提取，请人工核对" for key in extracted}}
+                return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": sources, "summary": _summary(extracted)}
             except RuntimeError as exc:
                 last_error = exc
         raise ExtractionError("AI 简历识别暂时不可用：" + str(last_error)[:160])
     extracted, confidence, unrecognized, sources = _local_extract(text)
-    return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": sources}
+    return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": sources, "summary": _summary(extracted)}

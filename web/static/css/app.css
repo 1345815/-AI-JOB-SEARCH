@@ -677,6 +677,22 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
 .resume-loading { color: var(--info); font-size: 13px; }
 .resume-error { color: var(--danger); background: var(--danger-soft); border: 1px solid #ecc7c2; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; }
 
+.resume-summary-card { border: 1px solid var(--border); border-top: 3px solid var(--accent); background: var(--surface); padding: 18px; box-shadow: var(--shadow-sm); }
+.resume-summary-main { display: flex; gap: 16px; align-items: flex-start; }
+.resume-summary-avatar { flex: 0 0 54px; width: 54px; height: 54px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: #fff; font-size: 23px; font-weight: 700; }
+.resume-summary-content { flex: 1; min-width: 0; }
+.resume-summary-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.resume-summary-heading h2 { margin: 0; font-size: 21px; letter-spacing: 0; }
+.resume-summary-chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.resume-summary-chip { min-width: 0; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.resume-summary-chip span { display: block; color: var(--text-3); font-size: 11px; margin-bottom: 2px; }
+.resume-summary-chip strong { display: block; overflow-wrap: anywhere; font-size: 13px; font-weight: 600; }
+.resume-summary-chip.is-empty strong { color: var(--text-3); font-weight: 400; }
+.resume-summary-empty { display: flex; flex-direction: column; gap: 3px; color: var(--text-2); font-size: 13px; }
+.resume-summary-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+#resumeMergePanel:not(.is-expanded) { display: none; }
+.field input.resume-autofilled { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); transition: background .2s, border-color .2s, box-shadow .2s; }
+
 .merge-title { font-size: 13px; font-weight: 650; color: var(--text-2); margin-bottom: 8px; }
 .merge-row {
   display: flex;
@@ -743,4 +759,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
   .auth-brand h1 { font-size: 21px; }
   .profile-banner { flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 12px; }
   .onboarding { grid-template-columns:1fr; }
+  .resume-summary-main { gap: 10px; }
+  .resume-summary-avatar { flex-basis: 44px; width: 44px; height: 44px; font-size: 19px; }
+  .resume-summary-actions { flex-direction: column; }
+  .resume-summary-actions .btn { width: 100%; }
 }

@@ -2,6 +2,7 @@
 
 import re
 import socket
+import time
 import urllib.parse
 import urllib.request
 import hashlib
@@ -10,6 +11,9 @@ from pathlib import Path
 from html.parser import HTMLParser
 
 from llm_client import llm_available, request_json
+
+_CACHE_FILE = Path(__file__).with_name("data") / "job_search_cache.json"
+_CACHE_TTL_SECONDS = 6 * 3600
 
 
 class _TextExtractor(HTMLParser):
@@ -158,3 +162,113 @@ def search_jobs(query: dict, settings: dict) -> list[dict]:
             if job.get("title") and job.get("company"): suggested.append({**job,"id":"job-"+hashlib.sha256((job.get("url") or job["title"]+job["company"]).encode()).hexdigest()[:16],"source":"llm_suggested"})
         return (local+suggested)[:limit]
     except Exception: return local[:limit]
+
+
+def search_company_jobs(company, city="", limit=8):
+    """按公司名联网搜索真实岗位（仅 AI 模式）。
+
+    流程：LLM 生成候选 URL（白名单来源）→ 抓取 → 详情链接提取 → 逐页抽取 →
+    6 小时缓存。全程只返回真实抓取成功的页面，绝不编造 URL。
+    返回 {"jobs": [...], "skipped": [{"url","reason"}], "cached": bool}。
+    """
+    limit = min(max(int(limit), 1), 10)
+    cache_key = (company + "|" + city).strip("|").lower()
+
+    # 缓存命中（6 小时内）
+    try:
+        if _CACHE_FILE.exists():
+            store = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+            entry = store.get(cache_key)
+            if entry and time.time() - float(entry.get("fetched_at", 0)) < _CACHE_TTL_SECONDS:
+                return {"jobs": entry.get("results", [])[:limit], "skipped": [], "cached": True}
+    except Exception:
+        pass
+
+    if not llm_available():
+        return {"jobs": [], "skipped": [{"url": "", "reason": "未配置 LLM，无法生成候选页面 URL"}], "cached": False}
+
+    # 阶段一：LLM 生成候选 URL（来源白名单，禁止编造）
+    try:
+        raw = request_json(
+            "你是中国校招岗位搜索助手，只输出 JSON。",
+            "为招聘公司生成可访问的岗位搜索页/详情页 URL 候选。公司：" + company +
+            "。来源仅限：公司官网招聘页、牛客网、BOSS直聘、拉勾、智联、前程无忧、实习僧、应届生求职网。" +
+            '返回 {"urls":[{"url":"...","note":"官网直达|搜索入口"}]}，最多 6 个。禁止编造 URL，不确定就少给。',
+        )
+    except Exception as exc:
+        return {"jobs": [], "skipped": [{"url": "", "reason": "LLM 生成候选失败：" + str(exc)[:120]}], "cached": False}
+
+    candidates = []
+    for item in (raw.get("urls", []) if isinstance(raw, dict) else []):
+        url = str(item.get("url") or "").strip()
+        if url.startswith(("http://", "https://")):
+            candidates.append({"url": url, "note": str(item.get("note") or "")})
+
+    # 阶段二：抓取候选页，提取同域岗位详情链接（总抓取 ≤10 页）
+    skipped = []
+    detail_urls = []
+    for cand in candidates[:6]:
+        if len(detail_urls) >= 10:
+            break
+        try:
+            text = fetch_url_text(cand["url"])
+        except Exception as exc:
+            skipped.append({"url": cand["url"], "reason": "抓取失败：" + str(exc)[:80]})
+            continue
+        if not text or len(text) < 100:
+            skipped.append({"url": cand["url"], "reason": "页面内容过少，可能是登录页或反爬限制"})
+            continue
+        host = urllib.parse.urlparse(cand["url"]).netloc
+        links = re.findall(
+            r'https?://[^\s"\'<>]+(?:/job/|/position/|/zp/job/|/jobs?/\d)[^\s"\'<>]*',
+            text,
+        )
+        detail = [link.rstrip(".,;，。") for link in links if urllib.parse.urlparse(link).netloc == host]
+        if detail:
+            detail_urls.extend(detail[:8])
+        else:
+            detail_urls.append(cand["url"])  # 无子链接则把该页当详情页
+
+    unique, seen = [], set()
+    for url in detail_urls[:10]:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
+
+    # 阶段三：逐页抽取结构化岗位信息
+    jobs = []
+    for url in unique:
+        try:
+            parsed = extract_job_from_url(url)
+        except Exception as exc:
+            skipped.append({"url": url, "reason": "抽取失败：" + str(exc)[:80]})
+            continue
+        if not parsed.get("title"):
+            skipped.append({"url": url, "reason": "未解析到岗位标题"})
+            continue
+        jobs.append({
+            "title": str(parsed.get("title") or "未命名岗位")[:80],
+            "company": str(parsed.get("company") or company)[:60],
+            "city": city,
+            "posting_type": "未知",
+            "work_type": "全职",
+            "salary": "",
+            "deadline": "",
+            "tags": ["联网搜索"],
+            "url": url,
+            "description": str(parsed.get("description") or "")[:2000],
+            "requirements": [str(r) for r in (parsed.get("requirements") or [])][:20],
+            "source": "web_search",
+        })
+
+    # 写缓存（仅岗位信息，不含个人数据）
+    try:
+        store = {}
+        if _CACHE_FILE.exists():
+            store = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+        store[cache_key] = {"fetched_at": time.time(), "results": jobs}
+        _CACHE_FILE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+    return {"jobs": jobs[:limit], "skipped": skipped, "cached": False}

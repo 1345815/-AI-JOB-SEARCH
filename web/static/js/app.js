@@ -139,7 +139,7 @@
     var cls = needs ? "zero" : scoreClass(score);
     var scoreText = needs ? "—" : score;
     var demo = job.is_demo ? '<span class="tag">示例岗位</span>' : "";
-    var source = job.source ? '<span class="tag tag-info">' + esc(job.source === "llm_suggested" ? "LLM 建议" : job.source === "local" ? "本地筛选" : job.source) + '</span>' : "";
+    var source = job.source ? '<span class="tag tag-info">' + esc(job.source === "llm_suggested" ? "LLM 建议" : job.source === "local" ? "本地筛选" : job.source === "web_search" ? "🌐 实时抓取" : job.source) + '</span>' : "";
     var deadline = job.deadline
       ? '<span class="tag ' + (job.deadline < new Date().toISOString().slice(0, 10) ? "tag-danger" : "tag-warn") + '">截止 ' + esc(job.deadline) + "</span>"
       : "";
@@ -375,6 +375,12 @@
       '<div class="page-head"><div><h1>岗位搜索</h1><p>基于你的档案，按技能、经历、文化与职业方向五维评分。</p></div></div>' +
       '<div class="panel job-parse-bar mb-14"><div class="panel-body">' +
       '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><button class="btn btn-primary" id="btnOnlineSearch">联网搜索（AI 模式）</button><span class="tag" id="aiModeBadge">检测中…</span></div>' +
+      '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
+      '<input id="companySearchName" type="text" style="flex:1;min-width:200px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="心仪公司名，如：网易" value="' + esc(state.companySearch || "") + '">' +
+      '<input id="companySearchCity" type="text" style="width:130px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="城市（可选）" value="' + esc(state.companySearchCity || "") + '">' +
+      '<button class="btn btn-primary" id="btnCompanySearch">按公司搜索</button>' +
+      "</div>" +
+      '<div id="companySearchStatus" class="mt-8"></div>' +
       '<div class="flex" style="gap:8px;flex-wrap:wrap">' +
       '<input id="jobUrlInput" type="url" style="flex:1;min-width:280px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="粘贴岗位网址，自动提取岗位与要求">' +
       '<button class="btn btn-primary" id="jobUrlParse">快速解析</button>' +
@@ -400,6 +406,7 @@
     });
     bindJobParse();
     bindOnlineSearch();
+    bindCompanySearch();
     bindJobItems();
   }
 
@@ -426,6 +433,38 @@
         return loadJobs().then(function () { renderJobs(); toast(data.hint || "岗位搜索完成", "success"); });
       }).catch(function (e) { toast(e.message, "error"); }).finally(function () { btn.disabled = false; });
     });
+  }
+
+  function bindCompanySearch() {
+    var btn = el("btnCompanySearch");
+    if (!btn) return;
+    var run = function () {
+      var nameInput = el("companySearchName"), cityInput = el("companySearchCity"), status = el("companySearchStatus");
+      var company = nameInput.value.trim();
+      if (!company) { status.innerHTML = '<div class="resume-error">请先输入公司名</div>'; return; }
+      state.companySearch = company; state.companySearchCity = cityInput.value.trim();
+      status.innerHTML = '<div class="resume-loading">正在联网抓取 ' + esc(company) + ' 的招聘岗位（约 10-30 秒）…</div>';
+      btn.disabled = true;
+      api("jobs/search/company", { method: "POST", body: { company: company, city: state.companySearchCity, limit: 8 } }).then(function (data) {
+        var html = "";
+        if (data.hint) html += '<div class="merge-source">' + esc(data.hint) + "</div>";
+        var skipped = data.skipped || [];
+        if (skipped.length) {
+          html += '<details class="merge-skipped mt-8"><summary>部分链接抓取失败（' + skipped.length + "）</summary>" +
+            skipped.map(function (s) { return '<div class="text-sm muted">· ' + esc(s.url || "(无链接)") + "：" + esc(s.reason || "未知原因") + "</div>"; }).join("") + "</details>";
+        }
+        status.innerHTML = html;
+        return loadJobs().then(function () {
+          renderJobs();
+          toast("已抓取 " + (data.data || []).length + " 个真实岗位", "success");
+        });
+      }).catch(function (e) {
+        status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
+      }).finally(function () { btn.disabled = false; });
+    };
+    btn.addEventListener("click", run);
+    var nameInput = el("companySearchName");
+    if (nameInput) nameInput.addEventListener("keydown", function (e) { if (e.key === "Enter") run(); });
   }
 
   function bindJobParse() {
@@ -732,6 +771,7 @@
       '<strong>点击选择或拖拽简历文件</strong><span class="muted">识别学校、专业、毕业时间、实习、项目、技能；每项须你确认后才写入</span></div>' +
       '<div id="resumeImportStatus" class="mt-8"></div>' +
       "</div></div>" +
+      '<div id="resumeSummaryPanel"></div>' +
       '<div id="resumeMergePanel"></div>' +
       '<div class="panel"><div class="panel-body profile-editor">' +
       '<div class="form-grid">' +
@@ -822,11 +862,73 @@
       var data = await resp.json();
       if (!resp.ok) throw new Error(data.error || data.message || "导入失败");
       status.innerHTML = "";
+      renderResumeSummary(data.data);
       renderMergePlan(data.data);
-      toast("简历解析完成，请确认要填入的字段", "success");
+      toast("简历解析完成，可一键填入核心字段", "success");
     } catch (e) {
       status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
     }
+  }
+
+  function renderResumeSummary(plan) {
+    var panel = el("resumeSummaryPanel");
+    if (!panel) return;
+    var summary = plan && plan.summary || {};
+    var fields = [
+      ["手机", "phone"], ["邮箱", "email"], ["学校", "school"],
+      ["学历", "highest_degree"], ["专业", "major"],
+      ["毕业时间", "graduation_date"], ["英语", "english_level"]
+    ];
+    var hasCore = fields.some(function (item) { return summary[item[1]]; }) || summary.name;
+    var name = summary.name || "未识别姓名";
+    var initial = summary.name ? String(summary.name).trim().slice(0, 1) : "?";
+    var chips = fields.map(function (item) {
+      var value = summary[item[1]];
+      return '<div class="resume-summary-chip' + (value ? '' : ' is-empty') + '"><span>' + esc(item[0]) + '</span><strong>' + esc(value || "未识别") + '</strong></div>';
+    }).join("");
+    panel.innerHTML = '<section class="resume-summary-card mb-14"><div class="resume-summary-main">' +
+      '<div class="resume-summary-avatar">' + esc(initial) + '</div><div class="resume-summary-content">' +
+      '<div class="resume-summary-heading"><h2>' + esc(name) + '</h2><span class="tag">' + esc(summary.status || "待完善") + '</span></div>' +
+      (hasCore ? '<div class="resume-summary-chips">' + chips + '</div>' : '<div class="resume-summary-empty"><strong>未识别到核心字段</strong><span>试试 PDF 文字版简历，或检查文件是否加密</span></div>') +
+      '</div></div><div class="resume-summary-actions"><button class="btn btn-primary" id="fillResumeSummary">一键填入全部</button>' +
+      '<button class="btn" id="toggleResumeReview">展开逐项核对</button></div></section>';
+    el("fillResumeSummary").disabled = !hasCore;
+    el("fillResumeSummary").addEventListener("click", function () { fillResumeSummary(plan); });
+    el("toggleResumeReview").addEventListener("click", function () {
+      var merge = el("resumeMergePanel");
+      merge.classList.toggle("is-expanded");
+      this.textContent = merge.classList.contains("is-expanded") ? "收起逐项核对" : "展开逐项核对";
+    });
+  }
+
+  async function fillResumeSummary(plan) {
+    var summary = plan.summary || {};
+    var inputs = {
+      name: "profileName", phone: "profilePhone", email: "profileEmail",
+      school: "profileSchool", highest_degree: "profileDegree", major: "profileMajor",
+      graduation_date: "profileGraduation", english_level: "profileEnglish", status: "profileStatus"
+    };
+    Object.keys(inputs).forEach(function (key) {
+      var input = el(inputs[key]);
+      if (!input || summary[key] === null || summary[key] === undefined || summary[key] === "") return;
+      input.value = summary[key];
+      input.classList.add("resume-autofilled");
+      setTimeout(function () { input.classList.remove("resume-autofilled"); }, 2000);
+    });
+    var highPaths = (plan.fills || []).concat(plan.updates || []).filter(function (item) {
+      return item.confidence === "high";
+    }).map(function (item) { return item.field_path; });
+    try {
+      var data = await api("profile/resume-import/apply", { method: "POST", body: { accepted_field_paths: highPaths } });
+      state.profile = data.data.profile;
+      state.user.profile = state.profile;
+      document.querySelectorAll(".merge-check").forEach(function (check) {
+        check.checked = highPaths.indexOf(check.getAttribute("data-path")) !== -1;
+        check.disabled = true;
+      });
+      updateMergeCount();
+      toast("核心字段已填入，可继续编辑后保存档案", "success");
+    } catch (e) { toast("自动应用失败：" + e.message, "error"); }
   }
 
   function renderMergePlan(plan) {
@@ -869,6 +971,7 @@
       '<button class="btn btn-primary" id="applyMerge">确认填入 0 项</button>' +
       "</div></div></div>";
     el("resumeMergePanel").innerHTML = html;
+    el("resumeMergePanel").classList.remove("is-expanded");
     el("applyMerge").addEventListener("click", applyMerge);
     el("discardMerge").addEventListener("click", function () {
       if (confirm("确定放弃本次导入？档案不会被修改。")) {
@@ -930,7 +1033,10 @@
   async function loadResumeDraft() {
     try {
       var data = await api("profile/resume-import/draft");
-      if (data && data.data) renderMergePlan(data.data);
+      if (data && data.data) {
+        renderResumeSummary(data.data);
+        renderMergePlan(data.data);
+      }
     } catch (e) {}
   }
 
