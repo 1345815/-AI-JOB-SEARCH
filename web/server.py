@@ -452,6 +452,9 @@ def update_user_profile(user_id, profile):
             "UPDATE users SET profile_json=?, updated_at=datetime('now', 'localtime') WHERE id=?",
             (json.dumps(profile, ensure_ascii=False), user_id),
         )
+        # Profile changes invalidate all cached match scores for this user.
+        # They must be recomputed against the new skills, experience and goals.
+        conn.execute("DELETE FROM evaluations WHERE user_id=?", (user_id,))
         conn.commit()
         conn.close()
 
@@ -1338,6 +1341,7 @@ class Handler(BaseHTTPRequestHandler):
                     "UPDATE users SET profile_json=?, updated_at=datetime('now', 'localtime') WHERE id=?",
                     (json.dumps(new_profile, ensure_ascii=False), user["id"]),
                 )
+                conn.execute("DELETE FROM evaluations WHERE user_id=?", (user["id"],))
                 conn.execute(
                     "UPDATE resume_import_drafts SET status='applied', updated_at=datetime('now', 'localtime') WHERE id=?",
                     (row["id"],),
