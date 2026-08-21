@@ -359,8 +359,12 @@
 
   function renderJobs() {
     var jobs = state.jobs.slice();
+    var hasFilters = Boolean(state.jobFilter || state.jobCityFilter || state.jobTypeFilter || state.jobSourceFilter || state.jobDeadlineFilter || (state.searchResults && state.searchResults.length));
+    var realJobs = jobs.filter(function (job) { return !job.is_demo; });
+    var showingDemoOnly = !hasFilters && !realJobs.length && jobs.some(function (job) { return job.is_demo; });
+    if (showingDemoOnly) jobs = [];
 
-    var selected = state.jobs.find(function (j) { return j.id === state.selectedJobId; }) || jobs[0];
+    var selected = showingDemoOnly ? null : (state.jobs.find(function (j) { return j.id === state.selectedJobId; }) || jobs[0]);
     if (selected) state.selectedJobId = selected.id;
 
     var listHtml =
@@ -379,9 +383,9 @@
       '<button class="btn btn-sm' + (state.jobSort === "new" ? " btn-primary" : "") + '" data-sort="new">最新</button>' +
       "</div></div>" +
       '<div class="list" style="border-top:1px solid var(--border)">' +
-      (jobs.length ? jobs.map(jobCard).join("") : emptyBlock("没有匹配的岗位", "换个关键词试试")) +
+      (showingDemoOnly ? '<div class="real-job-guide"><strong>岗位库暂时没有真实岗位</strong><span>示例岗位只用于熟悉界面，不建议直接投递。请使用上方的联网搜索、按公司搜索，或粘贴真实岗位链接。</span></div>' : (jobs.length ? jobs.map(jobCard).join("") : emptyBlock("没有匹配的岗位", "换个关键词试试"))) +
       "</div>" +
-      (state.jobs.length < state.jobsTotal ? '<div class="panel-body" style="padding:10px 12px;border-top:1px solid var(--border)"><button class="btn btn-sm" id="loadMoreJobs">加载更多（已显示 ' + state.jobs.length + " / 共 " + state.jobsTotal + "）</button></div>" : "") +
+      (!showingDemoOnly && state.jobs.length < state.jobsTotal ? '<div class="panel-body" style="padding:10px 12px;border-top:1px solid var(--border)"><button class="btn btn-sm" id="loadMoreJobs">加载更多（已显示 ' + state.jobs.length + " / 共 " + state.jobsTotal + "）</button></div>" : "") +
       "</div>";
 
     var detailHtml = selected ? jobDetail(selected) : '<div class="panel"><div class="panel-body">' + emptyBlock("选择岗位查看评估", "") + "</div></div>";
@@ -409,9 +413,11 @@
 
     el("content").innerHTML =
       '<div class="content-inner">' +
-      '<div class="page-head"><div><h1>岗位搜索</h1><p>基于你的档案，按技能、经历、文化与职业方向五维评分。</p></div></div>' +
+      '<div class="page-head"><div><h1>找真实岗位</h1><p>优先使用真实招聘信息，再用你的档案进行匹配评分。</p></div></div>' +
       '<div class="panel job-parse-bar mb-14"><div class="panel-body">' +
-      '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><button class="btn btn-primary" id="btnOnlineSearch">联网搜索（AI 模式）</button><span class="tag" id="aiModeBadge">检测中…</span></div>' +
+      '<div class="job-entry-title">三种方式找到真实岗位</div>' +
+      '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><input id="onlineSearchKeyword" type="text" style="flex:1;min-width:220px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="例如：AI产品运营、游戏策划、模型评测"><button class="btn btn-primary" id="btnOnlineSearch">联网搜索</button><span class="tag" id="aiModeBadge">检测中…</span></div>' +
+      '<div class="job-entry-hint">① 输入关键词联网搜索　② 输入公司名按公司搜索　③ 粘贴岗位网址快速解析</div>' +
       (state.searchHistory.length ? '<div class="flex" style="gap:6px;flex-wrap:wrap;margin-bottom:10px"><span class="muted text-sm">最近搜索</span>' + state.searchHistory.map(function (keyword) { return '<button class="btn btn-sm" data-search-history="' + esc(keyword) + '">' + esc(keyword) + "</button>"; }).join("") + "</div>" : "") +
       '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
       '<input id="companySearchName" type="text" style="flex:1;min-width:200px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="心仪公司名，如：网易" value="' + esc(state.companySearch || "") + '">' +
@@ -507,7 +513,10 @@
         toast(e.message, "error");
       }).finally(function () { btn.disabled = false; btn.textContent = originalText; });
     };
-    btn.addEventListener("click", function () { runSearch(prompt("输入岗位关键词", state.jobFilter || "AI 游戏策划")); });
+    var keywordInput = el("onlineSearchKeyword");
+    var submitSearch = function () { runSearch(keywordInput ? keywordInput.value : ""); };
+    btn.addEventListener("click", submitSearch);
+    if (keywordInput) keywordInput.addEventListener("keydown", function (e) { if (e.key === "Enter") submitSearch(); });
     document.querySelectorAll("[data-search-history]").forEach(function (historyBtn) {
       historyBtn.addEventListener("click", function () { runSearch(historyBtn.getAttribute("data-search-history")); });
     });
