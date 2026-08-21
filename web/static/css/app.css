@@ -434,6 +434,37 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
 .profile-section + .profile-section { margin-top: 14px; }
 .profile-editor { display: flex; flex-direction: column; gap: 12px; }
 .profile-editor textarea { min-height: 120px; }
+.profile-layout { display:grid; grid-template-columns:190px minmax(0,1fr); gap:16px; align-items:start; }
+.profile-nav { position:sticky; top:16px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px; }
+.profile-nav nav { display:flex; flex-direction:column; gap:3px; margin-top:14px; }
+.profile-nav-link { display:block; padding:8px 10px; border-radius:var(--radius-sm); color:var(--text-2); font-size:12.5px; text-decoration:none; }
+.profile-nav-link:hover,.profile-nav-link.active { color:var(--accent-ink); background:var(--accent-soft); font-weight:700; }
+.profile-progress-head { display:flex; justify-content:space-between; align-items:center; font-size:12px; }
+.profile-progress-head b { color:var(--accent-ink); }
+.profile-progress span { display:block; margin-top:7px; color:var(--text-3); font-size:11px; line-height:1.4; }
+.progress-track { height:6px; border-radius:99px; background:var(--surface-3); overflow:hidden; margin-top:9px; }
+.progress-track i { display:block; height:100%; background:var(--accent); border-radius:inherit; }
+.profile-main { min-width:0; }
+.profile-quality { margin-bottom:14px; padding:12px 14px; border:1px solid; border-radius:var(--radius); font-size:12.5px; }
+.profile-quality.is-warning { background:var(--warn-soft); border-color:#eed9b5; color:var(--text-2); }
+.profile-quality.is-ready { background:var(--accent-soft); border-color:#a9ded3; color:var(--accent-ink); }
+.profile-quality strong { display:block; }
+.profile-quality ul { margin:7px 0 0 17px; padding:0; line-height:1.6; }
+.profile-section { scroll-margin-top:18px; }
+.profile-section + .profile-section { margin-top:14px; }
+.experience-card { display:flex; gap:14px; align-items:flex-start; padding:13px 0; border-bottom:1px solid var(--border); position:relative; }
+.experience-card:last-child { border-bottom:0; }
+.experience-card > div { flex:1; min-width:0; }
+.experience-card strong,.experience-card span { display:block; }
+.experience-card span { color:var(--text-2); font-size:12px; margin-top:3px; }
+.experience-card p { color:var(--text-2); font-size:12px; line-height:1.5; margin:8px 0 0; white-space:pre-wrap; }
+.experience-card em { color:var(--text-3); font-size:11px; font-style:normal; white-space:nowrap; }
+.experience-fields { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.experience-fields textarea { grid-column:1/-1; min-height:70px; }
+.experience-fields input,.experience-fields textarea { width:100%; padding:8px 9px; border:1px solid var(--border-strong); border-radius:var(--radius-sm); background:var(--surface); }
+.icon-btn { border:0; background:transparent; color:var(--text-3); cursor:pointer; font-size:18px; line-height:1; padding:2px 4px; }
+.icon-btn:hover { color:var(--danger); }
+.empty-experience { color:var(--text-3); font-size:12.5px; padding:10px 0; }
 .onboarding { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
 .onboarding-step { display:flex; gap:9px; align-items:flex-start; padding:12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-2); text-align:left; color:var(--text); }
 .onboarding-step:hover { border-color:var(--accent); background:var(--accent-soft); }.onboarding-step b { display:grid; place-items:center; min-width:22px; height:22px; border-radius:50%; background:var(--accent); color:#fff; font-size:12px; }.onboarding-step strong,.onboarding-step small { display:block; }.onboarding-step strong{font-size:13px}.onboarding-step small{color:var(--text-3);font-size:11.5px;margin-top:2px}
@@ -750,6 +781,12 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
 }
 
 @media (max-width: 560px) {
+  .profile-layout { grid-template-columns:1fr; }
+  .profile-nav { position:static; }
+  .profile-nav nav { flex-direction:row; overflow-x:auto; gap:4px; margin-top:10px; padding-bottom:2px; }
+  .profile-nav-link { white-space:nowrap; }
+  .experience-fields { grid-template-columns:1fr; }
+  .experience-fields textarea { grid-column:auto; }
   .topbar { padding: 0 12px; }
   .content { padding: 12px; }
   .stat-grid { grid-template-columns: 1fr 1fr; gap: 10px; }

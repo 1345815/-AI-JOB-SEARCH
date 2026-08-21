@@ -49,6 +49,66 @@ _DB_LOCK = threading.RLock()
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_FAILURES = {}
 
+PROFILE_FIELDS = {
+    "name", "email", "phone", "city", "school", "major", "graduation_date",
+    "target_roles", "target_cities", "salary_expectation", "education",
+    "experiences", "projects", "skills", "languages", "awards", "summary",
+    "portfolio", "github", "linkedin", "status", "location_preference",
+    "career_goals", "notes", "highest_degree", "english_level", "target_role",
+    "target_sectors", "target_city", "available_date",
+}
+PROFILE_TEXT_LIMITS = {
+    "name": 80, "email": 160, "phone": 40, "city": 80, "school": 160,
+    "major": 160, "graduation_date": 40, "salary_expectation": 80,
+    "summary": 3000, "portfolio": 500, "github": 500, "linkedin": 500,
+}
+
+
+def _safe_json(value, fallback):
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+        return parsed if parsed is not None else fallback
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return fallback
+
+
+def normalize_profile(raw):
+    profile = dict(raw) if isinstance(raw, dict) else {}
+    for key in PROFILE_TEXT_LIMITS:
+        if key in profile and isinstance(profile[key], str):
+            profile[key] = profile[key].strip()
+    for key in ("target_roles", "target_cities"):
+        if key in profile and isinstance(profile[key], str):
+            profile[key] = [x.strip() for x in profile[key].replace("，", ",").split(",") if x.strip()]
+    for key in ("education", "experiences", "projects", "languages", "awards"):
+        if key in profile and not isinstance(profile[key], list):
+            profile[key] = []
+    if isinstance(profile.get("skills"), str):
+        profile["skills"] = {"strong": profile["skills"], "moderate": [], "weak": []}
+    if not isinstance(profile.get("skills"), dict):
+        profile["skills"] = {"strong": [], "moderate": [], "weak": []}
+    for key in ("strong", "moderate", "weak"):
+        value = profile["skills"].get(key, [])
+        profile["skills"][key] = [value] if isinstance(value, str) else (value if isinstance(value, list) else [])
+    return profile
+
+
+def validate_profile_patch(body):
+    if not isinstance(body, dict):
+        raise ValueError("档案数据必须是对象")
+    unknown = set(body) - PROFILE_FIELDS
+    if unknown:
+        raise ValueError("档案包含不支持的字段: " + ", ".join(sorted(unknown)))
+    for key, limit in PROFILE_TEXT_LIMITS.items():
+        if key in body and not isinstance(body[key], str):
+            raise ValueError(f"字段 {key} 必须是文本")
+        if isinstance(body.get(key), str) and len(body[key]) > limit:
+            raise ValueError(f"字段 {key} 超过 {limit} 个字符")
+    for key in ("education", "experiences", "projects", "languages", "awards"):
+        if key in body and (not isinstance(body[key], list) or len(body[key]) > 100):
+            raise ValueError(f"字段 {key} 必须是最多 100 项的数组")
+    return normalize_profile(body)
+
 
 def _utf8(path):
     return path.read_text(encoding="utf-8")
@@ -93,6 +153,8 @@ def db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 
@@ -347,7 +409,7 @@ def user_public(user):
     if not user:
         return None
     try:
-        profile = json.loads(user.get("profile_json") or "{}")
+        profile = _safe_json(user.get("profile_json"), {})
     except Exception:
         profile = {}
     return {
@@ -395,13 +457,13 @@ def job_row_to_dict(row):
         "posting_type": row["posting_type"],
         "work_type": row["work_type"],
         "experience": row["experience"],
-        "tags": json.loads(row["tags"] or "[]"),
+        "tags": _safe_json(row["tags"], []),
         "salary": row["salary"],
         "deadline": row["deadline"],
         "source": row["source"],
         "url": row["url"],
         "description": row["description"],
-        "requirements": json.loads(row["requirements"] or "[]"),
+        "requirements": _safe_json(row["requirements"], []),
         "created_at": row["created_at"],
         "is_demo": bool(row["is_demo"]),
     }
@@ -797,10 +859,10 @@ def get_evaluation(user_id, job_id):
         "job_id": row["job_id"],
         "overall": row["overall"],
         "verdict": row["verdict"],
-        "dimensions": json.loads(row["dimensions"]),
-        "gates": json.loads(row["gates"]),
-        "strengths": json.loads(row["strengths"]),
-        "gaps": json.loads(row["gaps"]),
+        "dimensions": _safe_json(row["dimensions"], {}),
+        "gates": _safe_json(row["gates"], {}),
+        "strengths": _safe_json(row["strengths"], []),
+        "gaps": _safe_json(row["gaps"], []),
         "summary": row["summary"],
         "created_at": row["created_at"],
     }
@@ -1172,7 +1234,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             return json.loads(raw.decode("utf-8"))
         except Exception:
-            return {}
+            self._send(400, {"ok": False, "error": "请求体不是有效 JSON"})
+            return None
 
     def _reject_oversized_body(self):
         try:
@@ -1207,7 +1270,7 @@ class Handler(BaseHTTPRequestHandler):
         return field, 200, ""
 
     def _api_resume_import(self, method, parts, user):
-        current = json.loads(user.get("profile_json") or "{}")
+        current = normalize_profile(_safe_json(user.get("profile_json"), {}))
 
         if method == "GET" and (not parts or parts[0] == "draft"):
             with _DB_LOCK:
@@ -1220,7 +1283,7 @@ class Handler(BaseHTTPRequestHandler):
             if not row:
                 self._send(200, {"ok": True, "data": None})
                 return
-            self._send(200, {"ok": True, "data": json.loads(row["merge_plan_json"])})
+            self._send(200, {"ok": True, "data": _safe_json(row["merge_plan_json"], {})})
             return
 
         if method == "POST" and parts and parts[0] == "apply":
@@ -1239,7 +1302,7 @@ class Handler(BaseHTTPRequestHandler):
                     conn.close()
                     self._send(404, {"ok": False, "error": "没有待确认的导入草稿"})
                     return
-                plan = json.loads(row["merge_plan_json"])
+                plan = _safe_json(row["merge_plan_json"], {})
                 new_profile, applied = apply_paths(current, plan, paths)
                 conn.execute(
                     "UPDATE users SET profile_json=?, updated_at=datetime('now', 'localtime') WHERE id=?",
@@ -1368,15 +1431,22 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if head == "profile" and method == "GET":
-            self._send(200, json.loads(user.get("profile_json") or "{}"))
+            self._send(200, _safe_json(user.get("profile_json"), {}))
             return
         if head == "profile" and method == "PUT":
             body = self._json_body()
-            current = json.loads(user.get("profile_json") or "{}")
-            current.update(body)
+            if body is None:
+                return
+            try:
+                patch = validate_profile_patch(body)
+            except ValueError as exc:
+                self._send(400, {"ok": False, "error": str(exc)})
+                return
+            current = normalize_profile(_safe_json(user.get("profile_json"), {}))
+            current.update(patch)
             update_user_profile(user["id"], current)
             user = get_user_by_token(self._session_token())
-            self._send(200, json.loads(user.get("profile_json") or "{}"))
+            self._send(200, _safe_json(user.get("profile_json"), {}))
             return
 
         if head == "profile" and len(parts) >= 2 and parts[1] == "resume-import":
@@ -1387,7 +1457,9 @@ class Handler(BaseHTTPRequestHandler):
         if head == "forms" and len(parts)>1 and parts[1]=="templates" and method=="GET":
             self._send(200,{"ok":True,"data":json.loads(_utf8(ROOT / "form_field_templates.json"))}); return
         if head == "forms" and len(parts)>1 and parts[1]=="fill-plan" and method=="POST":
-            body=self._json_body(); self._send(200,{"ok":True,"data":build_fill_plan(body.get("form_id",""),body.get("fields",[]),body.get("profile") or json.loads(user.get("profile_json") or "{}"))}); return
+            body=self._json_body();
+            if body is None: return
+            self._send(200,{"ok":True,"data":build_fill_plan(body.get("form_id",""),body.get("fields",[]),body.get("profile") or normalize_profile(_safe_json(user.get("profile_json"), {}))) }); return
 
         if head == "settings" and method == "GET":
             settings = load_settings()
@@ -1430,7 +1502,7 @@ class Handler(BaseHTTPRequestHandler):
             for job in jobs:
                 ev = get_evaluation(user["id"], job["id"])
                 if not ev:
-                    ev = score_job(job, json.loads(user.get("profile_json") or "{}"))
+                    ev = score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})))
                     save_evaluation(user["id"], ev)
                 results.append({**job, "evaluation": ev})
             sort = query.get("sort", ["new"])[0]
@@ -1456,7 +1528,7 @@ class Handler(BaseHTTPRequestHandler):
                 result=search_company_jobs(company,city,limit)
             except Exception as exc:
                 self._send(500,{"ok":False,"error":"联网搜索失败："+str(exc)[:160]}); return
-            profile=json.loads(user.get("profile_json") or "{}"); output=[]
+            profile=normalize_profile(_safe_json(user.get("profile_json"), {})); output=[]
             for item in result.get("jobs",[]):
                 try:
                     job=get_job(add_job(item)); ev=score_job(job,profile); save_evaluation(user["id"],ev)
@@ -1469,7 +1541,7 @@ class Handler(BaseHTTPRequestHandler):
         if head=="jobs" and len(parts)==2 and parts[1]=="search" and method=="POST":
             query=self._json_body(); s=load_settings(); enabled=bool(s.get("enabled") and s.get("api_key") and s.get("base_url")); results=search_jobs(query,s)
             if not enabled: self._send(200,{"ok":True,"data":[],"local_results":mark_saved_search_results(results),"mode":"local","hint":"请在设置中开启 AI 模式以使用联网搜索"}); return
-            profile=json.loads(user.get("profile_json") or "{}"); output=[]
+            profile=normalize_profile(_safe_json(user.get("profile_json"), {})); output=[]
             for item in results:
                 if item.get("source")=="local": continue
                 job=get_job(add_job(item)); ev=score_job(job,profile); save_evaluation(user["id"],ev); output.append({**job,"evaluation":ev})
@@ -1499,7 +1571,7 @@ class Handler(BaseHTTPRequestHandler):
                     "source": "URL解析",
                 })
                 job = get_job(job_id)
-                ev = score_job(job, json.loads(user.get("profile_json") or "{}"))
+                ev = score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})))
                 save_evaluation(user["id"], ev)
                 self._send(200, {"ok": True, "data": {**job, "evaluation": ev}})
             except ValueError as exc:
@@ -1515,7 +1587,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             job_id = add_job(body)
             job = get_job(job_id)
-            ev = score_job(job, json.loads(user.get("profile_json") or "{}"))
+            ev = score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})))
             save_evaluation(user["id"], ev)
             self._send(200, {**job, "evaluation": ev})
             return
@@ -1527,7 +1599,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"ok": False, "error": "岗位不存在"})
                 return
             if method == "GET":
-                ev = get_evaluation(user["id"], job_id) or score_job(job, json.loads(user.get("profile_json") or "{}"))
+                ev = get_evaluation(user["id"], job_id) or score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})))
                 self._send(200, {**job, "evaluation": ev})
                 return
             if method == "DELETE":
@@ -1549,7 +1621,7 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 self._send(404, {"ok": False, "error": "岗位不存在"})
                 return
-            profile = json.loads(user.get("profile_json") or "{}")
+            profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
             if kind == "resume":
                 content = generate_resume(job, profile)
             elif kind == "cover_letter":
@@ -1698,7 +1770,7 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 self._send(404, {"ok": False, "error": "岗位不存在"})
                 return
-            profile = json.loads(user.get("profile_json") or "{}")
+            profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
             content = generate_interview_prep(job, profile)
             with _DB_LOCK:
                 conn = db()
@@ -1719,7 +1791,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"ok": False, "error": "消息为空"})
                 return
             now = time.strftime("%Y-%m-%d %H:%M")
-            profile = json.loads(user.get("profile_json") or "{}")
+            profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
             reply = assistant_reply(user_text, profile)
             with _DB_LOCK:
                 conn = db()
