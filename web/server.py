@@ -563,9 +563,11 @@ def filter_jobs(jobs, query):
 
 def mark_saved_search_results(results):
     saved_jobs = list_jobs()
+    saved_by_identity = {job_identity(job): job for job in saved_jobs}
     output = []
     for item in results:
-        saved = next((job for job in saved_jobs if (item.get("id") and job["id"] == item["id"]) or (item.get("url") and job.get("url") == item["url"]) or (job.get("title") == item.get("title") and job.get("company") == item.get("company"))), None)
+        saved = next((job for job in saved_jobs if item.get("id") and job["id"] == item["id"]), None)
+        saved = saved or saved_by_identity.get(job_identity(item))
         output.append({**item, "saved_job_id": saved["id"] if saved else None})
     return output
 
@@ -602,6 +604,27 @@ def add_job(job):
         conn.commit()
         conn.close()
     return job_id
+
+
+def normalize_job_url(url):
+    """用于去重的链接归一化，不改变用户保存的原始链接。"""
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        query = [(k, v) for k, v in query if not k.lower().startswith(("utm_", "spm", "from="))]
+        return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), urllib.parse.urlencode(query), ""))
+    except ValueError:
+        return raw.rstrip("/").lower()
+
+
+def job_identity(job):
+    url = normalize_job_url(job.get("url"))
+    if url:
+        return ("url", url)
+    return ("text", _norm("|".join((job.get("title", ""), job.get("company", ""), job.get("city", "")))))
 
 
 # ---------------------------------------------------------------- 评分引擎

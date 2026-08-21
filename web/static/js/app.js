@@ -934,14 +934,32 @@
   async function editApplication(id) {
     var app = state.applications.find(function (item) { return String(item.id) === String(id); });
     if (!app) return;
-    var notes = prompt("备注 / 沟通记录", app.notes || ""); if (notes === null) return;
-    var contact = prompt("联系人（姓名、邮箱或电话）", app.contact || ""); if (contact === null) return;
-    var followUp = prompt("下次跟进日期（YYYY-MM-DD，留空可清除）", app.follow_up_at || ""); if (followUp === null) return;
-    var attachment = prompt("附件名称（例如：定制简历-产品岗.pdf）", app.attachment_name || ""); if (attachment === null) return;
-    try {
-      await api("applications/" + id, { method:"PATCH", body:{notes:notes, contact:contact, follow_up_at:followUp, attachment_name:attachment} });
-      await loadApplications(); toast("跟进记录已保存", "success"); renderPipeline();
-    } catch (e) { toast("保存失败：" + e.message, "error"); }
+    var overlay = document.createElement("div");
+    overlay.className = "modal-overlay open";
+    overlay.innerHTML = '<div class="modal modal-wide"><div class="modal-head"><strong>编辑跟进 · ' + esc(app.title) + '</strong><button class="icon-btn modal-close" aria-label="关闭">×</button></div>' +
+      '<div class="modal-body"><label class="field"><span>备注 / 沟通记录</span><textarea id="editAppNotes" rows="5" placeholder="记录沟通内容、面试反馈或下一步计划">' + esc(app.notes || "") + '</textarea></label>' +
+      '<div class="form-grid"><label class="field"><span>联系人</span><input id="editAppContact" type="text" placeholder="姓名、邮箱或电话" value="' + esc(app.contact || "") + '"></label>' +
+      '<label class="field"><span>下次跟进日期</span><input id="editAppFollow" type="date" value="' + esc(app.follow_up_at || "") + '"></label></div>' +
+      '<label class="field"><span>附件名称</span><input id="editAppAttachment" type="text" placeholder="例如：定制简历-产品岗.pdf" value="' + esc(app.attachment_name || "") + '"></label>' +
+      '<div class="modal-actions"><button class="btn" id="cancelEditApp">取消</button><button class="btn btn-primary" id="saveEditApp">保存跟进</button></div></div></div>';
+    document.body.appendChild(overlay);
+    var close = function () { overlay.remove(); };
+    overlay.querySelector(".modal-close").addEventListener("click", close);
+    overlay.querySelector("#cancelEditApp").addEventListener("click", close);
+    overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
+    overlay.querySelector("#saveEditApp").addEventListener("click", async function () {
+      var save = overlay.querySelector("#saveEditApp");
+      save.disabled = true; save.textContent = "保存中…";
+      try {
+        await api("applications/" + id, { method:"PATCH", body:{
+          notes: overlay.querySelector("#editAppNotes").value.trim(),
+          contact: overlay.querySelector("#editAppContact").value.trim(),
+          follow_up_at: overlay.querySelector("#editAppFollow").value,
+          attachment_name: overlay.querySelector("#editAppAttachment").value.trim()
+        } });
+        close(); await loadApplications(); toast("跟进记录已保存", "success"); renderPipeline();
+      } catch (e) { save.disabled = false; save.textContent = "保存跟进"; toast("保存失败：" + e.message, "error"); }
+    });
   }
 
   async function moveApplication(id, stage) {
