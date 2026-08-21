@@ -20,6 +20,7 @@
     searchSkipped: [],
     searchHistory: [],
     searchMode: null,
+    advancedExpanded: false,
     interviewJobId: null,
     interviewContent: "",
     chatOpen: false,
@@ -248,7 +249,7 @@
   async function register(username, email, password) {
     var data = await api("auth/register", { method: "POST", body: { username: username, email: email, password: password } });
     setUser(data.user);
-    toast("注册成功，先完善个人档案", "success");
+    toast("注册成功，去简历库上传简历吧", "success");
     await bootApp();
   }
 
@@ -684,7 +685,7 @@
       "</div>" +
       '<div class="detail-score-row"><div class="detail-score">' + (needs ? "—" : score) + "</div>" +
       '<div><div class="detail-verdict">' + esc(needs ? "完善档案后查看匹配度" : (ev.verdict || "待评估")) + "</div>" +
-      '<div class="detail-summary">' + esc(needs ? "先完善个人资料，系统会结合你的技能、经历和职业目标进行五维匹配评分。" : (ev.summary || "")) + "</div></div></div>" +
+      '<div class="detail-summary">' + esc(needs ? "先到简历库上传简历，系统会结合你的技能、经历和职业目标进行五维匹配评分。" : (ev.summary || "")) + "</div></div></div>" +
       (gateTags ? '<div class="detail-meta">' + gateTags + "</div>" : "") +
       "</div>" +
       '<div class="detail-sections">' +
@@ -973,6 +974,7 @@
     return issues;
   }
 
+
   function renderProfile() {
     var p = state.profile || {};
     var skills = p.skills || {};
@@ -991,21 +993,29 @@
     var completionPct = Math.round(completion / 8 * 100);
     el("content").innerHTML =
       '<div class="content-inner">' +
-      '<div class="page-head"><div><h1>个人资料</h1><p>填写你的真实经历与目标，岗位评分、简历和求职信会据此生成。资料仅存储在你的账号下。</p></div>' +
-      '<div class="page-actions"><button class="btn btn-primary" id="saveProfile">保存档案</button></div></div>' +
-      '<div class="profile-layout"><aside class="profile-nav"><div class="profile-progress"><div class="profile-progress-head"><strong>档案完成度</strong><b>' + completionPct + '%</b></div><div class="progress-track"><i style="width:' + completionPct + '%"></i></div><span>已完成 ' + completion + '/8 项核心资料</span></div><nav>' +
-      ['个人信息','求职意向','教育背景','工作经历','项目经验','技能与语言','自我描述'].map(function (name, i) { return '<a href="#profile-section-' + i + '" class="profile-nav-link' + (i === 0 ? ' active' : '') + '">' + name + '</a>'; }).join('') +
-      '</nav></aside><div class="profile-main"><div class="profile-quality ' + (profileQuality(p).length ? 'is-warning' : 'is-ready') + '"><strong>' + (profileQuality(p).length ? 'HR 视角：还有 ' + profileQuality(p).length + ' 项影响投递质量' : 'HR 视角：档案已达到基本投递标准') + '</strong><ul>' + profileQuality(p).map(function (item) { return '<li>' + esc(item) + '</li>'; }).join('') + '</ul></div>' +
-      '<div class="panel mb-14"><div class="panel-head"><strong>导入简历，逐项确认</strong><span class="sub">支持 PDF / DOCX / TXT / MD，≤10MB</span></div>' +
+      '<div class="page-head"><div><h1>简历库</h1><p>把你之前的所有简历都放进来，岗位评分、简历生成和求职信会自动使用这些资料。资料只保存在你的账号下。</p></div>' +
+      '<div class="page-actions"><div class="resume-profile-badge"><span>档案完成度</span><b>' + completionPct + '%</b></div></div></div>' +
+      '<div class="panel mb-14"><div class="panel-head"><strong>上传简历</strong><span class="sub">支持 PDF / DOCX / TXT / MD，每份 ≤10MB，可一次多选</span></div>' +
       '<div class="panel-body">' +
-      '<div class="upload-zone" id="uploadZone"><input type="file" id="resumeFile" accept=".pdf,.docx,.txt,.md" hidden>' +
-      '<strong>点击选择或拖拽简历文件</strong><span class="muted">识别学校、专业、毕业时间、实习、项目、技能；每项须你确认后才写入</span></div>' +
+      '<div class="upload-zone" id="uploadZone"><input type="file" id="resumeFile" accept=".pdf,.docx,.txt,.md" multiple hidden>' +
+      '<strong>点击选择或拖拽简历文件</strong><span class="muted">可一次上传多份历史简历；识别学校、专业、毕业时间、实习、项目、技能，逐项确认后写入</span></div>' +
       '<div id="resumeImportStatus" class="mt-8" role="status" aria-live="polite" aria-atomic="true"></div>' +
       "</div></div>" +
+      '<div class="panel mb-14"><div class="panel-head"><strong>我的简历</strong><span class="sub" id="resumeListCount"></span></div>' +
+      '<div class="panel-body"><div id="resumeListPanel"><div class="loading"><div class="spinner"></div></div></div></div></div>' +
       '<div id="resumeSummaryPanel"></div>' +
       '<div id="resumeMergePanel"></div>' +
-      '<div class="panel profile-section" id="profile-section-0"><div class="panel-head"><strong>个人信息</strong><span class="sub">用于生成简历和招聘表单建议</span></div><div class="panel-body profile-editor">' +
-      '<div class="form-grid">' +
+      '<div class="panel mb-14 profile-section" id="profile-section-intent"><div class="panel-head"><strong>补充求职意向</strong><span class="sub">可选，填好后岗位评分更准</span></div>' +
+      '<div class="panel-body profile-editor"><div class="form-grid">' +
+      field("目标岗位", "profileTargetRole", p.target_role || "AI 产品运营 / AI 游戏策划") +
+      field("目标方向", "profileTargetSector", (p.target_sectors || []).join("、")) +
+      field("期望城市", "profileTargetCity", p.target_city || p.city || "") +
+      field("可入职时间", "profileAvailableDate", p.available_date || "") +
+      '</div><div class="form-actions"><button class="btn btn-primary" id="saveIntent">保存求职意向</button></div></div></div>' +
+      '<div class="panel profile-section" id="advancedProfilePanel"><div class="panel-head"><strong>完整档案（高级）</strong><span class="sub">简历识别后会自动填入，需要时再展开手工修改</span>' +
+      '<button class="btn btn-sm" id="toggleAdvanced">' + (state.advancedExpanded ? "收起编辑" : "展开编辑") + '</button></div>' +
+      '<div class="panel-body profile-editor" id="advancedProfileBody" style="display:' + (state.advancedExpanded ? "" : "none") + '">' +
+      '<h4 class="advanced-title">个人信息<span class="sub">用于生成简历和招聘表单建议</span></h4><div class="form-grid">' +
       field("姓名", "profileName", p.name) +
       field("城市", "profileCity", p.city) +
       field("手机", "profilePhone", p.phone || "") +
@@ -1020,23 +1030,31 @@
       "</div>" +
       '<label class="field"><span>工作地点偏好</span><textarea id="profileLocation" placeholder="例如：北京、上海、杭州；接受全国异地">' + esc(p.location_preference || "") + "</textarea></label>" +
       '<div class="resume-privacy">身份证号、紧急联系人电话等敏感资料不会被自动填入招聘表单，需你每次手动确认。</div>' +
-      "</div></div>" +
-      '<div class="panel profile-section" id="profile-section-1"><div class="panel-head"><strong>求职意向</strong><span class="sub">明确目标，帮助系统筛选和排序岗位</span></div><div class="panel-body profile-editor"><div class="form-grid">' +
-      field("目标岗位", "profileTargetRole", p.target_role || "AI 产品运营 / AI 游戏策划") + field("目标方向", "profileTargetSector", (p.target_sectors || []).join('、')) + field("期望城市", "profileTargetCity", p.target_city || p.city || "") + field("可入职时间", "profileAvailableDate", p.available_date || "") +
-      '</div></div></div>' +
-      '<div class="panel profile-section" id="profile-section-2"><div class="panel-head"><strong>教育背景</strong><span class="sub">校招岗位重点关注信息</span></div><div class="panel-body"><div class="experience-card"><div><strong>' + esc(school || '尚未填写学校') + '</strong><span>' + esc(major || '尚未填写专业') + ' · ' + esc(degree) + '</span></div><em>' + esc(graduation || '毕业时间待填写') + '</em></div></div></div>' +
-      '<div class="panel profile-section" id="profile-section-3"><div class="panel-head"><strong>工作经历</strong><button class="btn btn-sm" id="addExperience">＋ 添加</button></div><div class="panel-body"><div id="experienceList">' + renderExperienceCards(experiences) + '</div></div></div>' +
-      '<div class="panel profile-section" id="profile-section-4"><div class="panel-head"><strong>项目经验</strong><button class="btn btn-sm" id="addProject">＋ 添加</button></div><div class="panel-body"><div id="projectList">' + renderProjectCards(projects) + '</div></div></div>' +
-      '<div class="panel profile-section" id="profile-section-5"><div class="panel-head"><strong>技能与语言</strong><span class="sub">支持换行、逗号、顿号或分号分隔，一行可填写多个项目</span></div><div class="panel-body profile-editor"><label class="field"><span>核心优势</span><textarea id="profileStrengths" placeholder="例如：Prompt 工程，Python 数据分析；用户洞察与结构化表达">' + esc((skills.strong || []).join("\n")) + "</textarea></label>" +
+      '<h4 class="advanced-title">教育背景<span class="sub">校招岗位重点关注信息</span></h4><div class="experience-card"><div><strong>' + esc(school || '尚未填写学校') + '</strong><span>' + esc(major || '尚未填写专业') + ' · ' + esc(degree) + '</span></div><em>' + esc(graduation || '毕业时间待填写') + '</em></div>' +
+      '<h4 class="advanced-title">工作经历<button class="btn btn-sm" id="addExperience">＋ 添加</button></h4><div id="experienceList">' + renderExperienceCards(experiences) + '</div>' +
+      '<h4 class="advanced-title">项目经验<button class="btn btn-sm" id="addProject">＋ 添加</button></h4><div id="projectList">' + renderProjectCards(projects) + '</div>' +
+      '<h4 class="advanced-title">技能与语言<span class="sub">支持换行、逗号、顿号或分号分隔，一行可填写多个项目</span></h4>' +
+      '<label class="field"><span>核心优势</span><textarea id="profileStrengths" placeholder="例如：Prompt 工程，Python 数据分析；用户洞察与结构化表达">' + esc((skills.strong || []).join("\n")) + "</textarea></label>" +
       '<label class="field"><span>辅助技能</span><textarea id="profileModerate" placeholder="例如：SQL、Figma、英语沟通">' + esc((skills.moderate || []).join("\n")) + "</textarea></label>" +
-      '<label class="field"><span>职业目标（每行一条）</span><textarea id="profileGoals">' + esc((p.career_goals || []).join("\n")) + '</textarea></label></div></div>' +
-      '<div class="panel profile-section" id="profile-section-6"><div class="panel-head"><strong>自我描述</strong><span class="sub">用事实说明你的优势、动机和发展方向</span></div><div class="panel-body profile-editor"><label class="field"><span>个人简介</span><textarea id="profileMore" style="min-height:160px" placeholder="简要介绍你的经历、优势和职业目标">' + esc(p.notes || "") + '</textarea></label></div></div></div></div>' +
+      '<label class="field"><span>职业目标（每行一条）</span><textarea id="profileGoals">' + esc((p.career_goals || []).join("\n")) + '</textarea></label>' +
+      '<h4 class="advanced-title">自我描述<span class="sub">用事实说明你的优势、动机和发展方向</span></h4>' +
+      '<label class="field"><span>个人简介</span><textarea id="profileMore" style="min-height:160px" placeholder="简要介绍你的经历、优势和职业目标">' + esc(p.notes || "") + '</textarea></label>' +
+      '<div class="form-actions"><button class="btn btn-primary" id="saveProfile">保存完整档案</button></div>' +
+      '</div></div>' +
       "</div>";
+    el("toggleAdvanced").addEventListener("click", function () {
+      state.advancedExpanded = !state.advancedExpanded;
+      var body = el("advancedProfileBody");
+      body.style.display = state.advancedExpanded ? "" : "none";
+      this.textContent = state.advancedExpanded ? "收起编辑" : "展开编辑";
+    });
+    el("saveIntent").addEventListener("click", saveIntent);
     el("saveProfile").addEventListener("click", saveProfile);
     bindUploadZone();
+    loadResumeList();
     loadResumeDraft();
-    bindProfileNavigation();
     bindExperienceActions();
+    bindProfileNavigation();
     var formPanel = document.createElement("div");
     formPanel.className = "panel profile-section";
     formPanel.innerHTML = '<div class="panel-head"><strong>招聘网站助手</strong><span class="sub">粘贴招聘表单 HTML，识别字段并生成填写建议</span></div><div class="panel-body"><label class="field"><span>表单 HTML</span><textarea id="formHtml" placeholder="粘贴招聘官网表单 HTML"></textarea></label><button class="btn btn-primary mt-8" id="extractForm">识别字段</button><div id="formResult" class="mt-8"></div></div>';
@@ -1088,15 +1106,19 @@
       var items = state.profile.experiences || [];
       items.push({ company: '', role: '', description: '', start_date: '', end_date: '', current: false });
       state.profile.experiences = items;
+      state.advancedExpanded = true;
       renderProfile();
-      document.getElementById('profile-section-3').scrollIntoView({ behavior: 'smooth' });
+      var panel = el('advancedProfilePanel');
+      if (panel) panel.scrollIntoView({ behavior: 'smooth' });
     });
     if (addProject) addProject.addEventListener('click', function () {
       var items = state.profile.projects || [];
       items.push({ name: '', role: '', description: '', start_date: '', end_date: '', current: false });
       state.profile.projects = items;
+      state.advancedExpanded = true;
       renderProfile();
-      document.getElementById('profile-section-4').scrollIntoView({ behavior: 'smooth' });
+      var panel = el('advancedProfilePanel');
+      if (panel) panel.scrollIntoView({ behavior: 'smooth' });
     });
     document.querySelectorAll('.remove-experience').forEach(function (button) { button.addEventListener('click', function () { state.profile.experiences.splice(Number(button.dataset.index), 1); renderProfile(); }); });
     document.querySelectorAll('.remove-project').forEach(function (button) { button.addEventListener('click', function () { state.profile.projects.splice(Number(button.dataset.index), 1); renderProfile(); }); });
@@ -1108,49 +1130,60 @@
     if (!zone || !input) return;
     zone.addEventListener("click", function () { input.click(); });
     input.addEventListener("change", function () {
-      if (input.files && input.files[0]) uploadResume(input.files[0]);
+      if (input.files && input.files.length) uploadResume(input.files);
     });
     ["dragover", "drop"].forEach(function (name) {
       zone.addEventListener(name, function (e) {
         e.preventDefault();
         e.stopPropagation();
-        if (name === "drop" && e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
-          uploadResume(e.dataTransfer.files[0]);
+        if (name === "drop" && e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+          uploadResume(e.dataTransfer.files);
         }
       });
     });
   }
 
-  async function uploadResume(file) {
+  async function uploadResume(files) {
+    files = Array.prototype.slice.call(files || []);
+    if (!files.length) return;
     var status = el("resumeImportStatus");
-    var name = (file.name || "").toLowerCase();
     var allowed = [".pdf", ".docx", ".txt", ".md"];
-    if (!allowed.some(function (e) { return name.endsWith(e); })) {
-      status.innerHTML = '<div class="resume-error">仅支持 PDF / DOCX / TXT / MD 文件</div>';
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      status.innerHTML = '<div class="resume-error">文件超过 10MB 上限</div>';
+    var invalid = files.filter(function (file) {
+      var name = (file.name || "").toLowerCase();
+      return !allowed.some(function (ext) { return name.endsWith(ext); }) || file.size > 10 * 1024 * 1024;
+    });
+    if (invalid.length) {
+      status.innerHTML = '<div class="resume-error">仅支持 PDF / DOCX / TXT / MD 文件，每份不超过 10MB</div>';
       return;
     }
     var form = new FormData();
-    form.append("file", file);
+    files.forEach(function (file) { form.append("files", file); });
     var zone = el("uploadZone"), input = el("resumeFile");
     if (zone) { zone.style.pointerEvents = "none"; zone.setAttribute("aria-busy", "true"); }
     if (input) input.disabled = true;
-    status.innerHTML = '<div class="resume-loading">正在解析并识别简历，请勿关闭页面…</div>';
+    status.innerHTML = '<div class="resume-loading">正在上传并识别 ' + files.length + ' 份简历，请勿关闭页面…</div>';
     try {
-      var resp = await fetch("/api/profile/resume-import", {
+      var resp = await fetch("/api/resumes/upload", {
         method: "POST",
         credentials: "include",
         body: form
       });
       var data = await resp.json();
       if (!resp.ok) throw new Error(data.error || data.message || "导入失败");
+      var d = data.data || {};
       status.innerHTML = "";
-      renderResumeSummary(data.data);
-      renderMergePlan(data.data);
-      toast("简历解析完成，可一键填入核心字段", "success");
+      if (d.plan) {
+        renderResumeSummary(d.plan);
+        renderMergePlan(d.plan);
+      }
+      if (d.errors && d.errors.length) {
+        status.innerHTML = '<div class="resume-error">' + d.errors.map(function (e) {
+          return esc(e.filename) + "：" + esc(e.error);
+        }).join("<br>") + '</div>';
+      }
+      loadResumeList();
+      var done = (d.items || []).length;
+      toast(done + " 份简历已存入简历库，识别结果可逐项确认", "success");
     } catch (e) {
       status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
     } finally {
@@ -1158,6 +1191,73 @@
       if (input) { input.disabled = false; input.value = ""; }
     }
   }
+
+  function formatFileSize(bytes) {
+    if (bytes === null || bytes === undefined) return "";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  }
+
+  async function loadResumeList() {
+    var panel = el("resumeListPanel");
+    var count = el("resumeListCount");
+    if (!panel) return;
+    try {
+      var data = await api("resumes");
+      var list = data.data || [];
+      if (count) count.textContent = "共 " + list.length + " 份";
+      if (!list.length) {
+        panel.innerHTML = '<div class="empty-resume-list"><strong>简历库还是空的</strong><span>把你之前的所有简历都传上来，评分、简历生成和求职信就能直接用了</span></div>';
+        return;
+      }
+      panel.innerHTML = '<div class="resume-list">' + list.map(function (item) {
+        return '<div class="resume-list-item">' +
+          '<div class="resume-list-icon">📄</div>' +
+          '<div class="resume-list-info"><strong>' + esc(item.filename) + '</strong><span class="muted">' + esc(formatFileSize(item.size)) + (item.created_at ? ' · ' + esc(item.created_at) : "") + '</span></div>' +
+          '<div class="resume-list-actions">' +
+          '<a class="btn btn-sm" href="/api/resumes/' + item.id + '/download">下载</a>' +
+          '<button class="btn btn-sm btn-danger" data-resume-delete="' + item.id + '">删除</button>' +
+          '</div></div>';
+      }).join('') + '</div>';
+      panel.querySelectorAll("[data-resume-delete]").forEach(function (btn) {
+        btn.addEventListener("click", function () { deleteResume(Number(btn.getAttribute("data-resume-delete"))); });
+      });
+    } catch (e) {
+      panel.innerHTML = '<div class="resume-error">简历列表加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function deleteResume(id) {
+    if (!window.confirm("确定删除这份简历吗？删除后无法恢复。")) return;
+    try {
+      await api("resumes/" + id, { method: "DELETE" });
+      toast("简历已删除", "success");
+      loadResumeList();
+    } catch (e) { toast("删除失败：" + e.message, "error"); }
+  }
+
+  async function saveIntent() {
+    var btn = el("saveIntent");
+    if (btn) { btn.disabled = true; btn.textContent = "保存中…"; }
+    var body = {
+      target_role: el("profileTargetRole").value.trim(),
+      target_sectors: el("profileTargetSector").value.split(/[、,，\n]/).map(function (s) { return s.trim(); }).filter(Boolean),
+      target_city: el("profileTargetCity").value.trim(),
+      available_date: el("profileAvailableDate").value.trim()
+    };
+    try {
+      state.profile = await api("profile", { method: "PUT", body: body });
+      state.user.profile = state.profile;
+      await loadJobs();
+      updateProfileBanner();
+      toast("求职意向已保存", "success");
+    } catch (e) { toast("保存失败：" + e.message, "error"); }
+    finally {
+      if (btn) { btn.disabled = false; btn.textContent = "保存求职意向"; }
+    }
+  }
+
 
   function renderResumeSummary(plan) {
     var panel = el("resumeSummaryPanel");
@@ -1220,7 +1320,7 @@
         check.disabled = true;
       });
       updateMergeCount();
-      toast("核心字段已填入，可继续编辑后保存档案", "success");
+      toast("核心字段已填入档案，可展开完整档案查看", "success");
     } catch (e) { toast("自动应用失败：" + e.message, "error"); }
   }
 
@@ -1543,7 +1643,7 @@
     jobs: "岗位搜索",
     pipeline: "申请进度",
     interview: "面试准备",
-    profile: "个人资料"
+    profile: "简历库"
   };
 
   function route() {

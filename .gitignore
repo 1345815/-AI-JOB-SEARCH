@@ -27,6 +27,7 @@ web/data/careerpilot.db-wal
 web/data/settings.json
 web/data/profile.private.json
 web/data/backups/
+web/data/resumes/
 # Match at any depth: the job-scraper skill resolves `job_scraper/` relative to
 # its own directory, so these land at .claude/skills/job-scraper/job_scraper/*.
 # A rooted `job_scraper/...` pattern silently fails to match them.

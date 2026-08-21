@@ -38,6 +38,7 @@ STATIC_DIR = ROOT / "static"
 JOBS_SEED = DATA_DIR / "jobs_seed.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 DB_FILE = Path(os.environ.get("DB_PATH", str(DATA_DIR / "careerpilot.db")))
+RESUME_DIR = DATA_DIR / "resumes"
 
 SESSION_MAX_AGE_DAYS = int(os.environ.get("SESSION_MAX_AGE_DAYS", "7"))
 SESSION_COOKIE = "careerpilot_session"
@@ -269,6 +270,15 @@ def init_db():
                 status TEXT DEFAULT 'pending',
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS resumes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                filename TEXT NOT NULL,
+                stored_name TEXT NOT NULL,
+                size INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
             """
@@ -1269,6 +1279,26 @@ class Handler(BaseHTTPRequestHandler):
             return None, 400, "缺少 file 字段"
         return field, 200, ""
 
+    def _multipart_files(self):
+        content_type = self.headers.get("Content-Type", "")
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > 50 * 1024 * 1024 + 4096:
+            return None, 413, "文件总大小超过 50MB 上限"
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={
+                "REQUEST_METHOD": "POST",
+                "CONTENT_TYPE": content_type,
+            },
+        )
+        field = form["files"] if "files" in form else (form["file"] if "file" in form else None)
+        fields = field if isinstance(field, list) else ([field] if field is not None else [])
+        fields = [f for f in fields if getattr(f, "filename", None)]
+        if not fields:
+            return None, 400, "缺少 file 字段"
+        return fields, 200, ""
+
     def _api_resume_import(self, method, parts, user):
         current = normalize_profile(_safe_json(user.get("profile_json"), {}))
 
@@ -1379,6 +1409,162 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(404, {"ok": False, "error": "not found"})
 
+    def _api_resumes(self, method, parts, user):
+        if method == "GET" and not parts:
+            with _DB_LOCK:
+                conn = db()
+                rows = conn.execute(
+                    "SELECT id, filename, size, created_at FROM resumes WHERE user_id=? ORDER BY id DESC",
+                    (user["id"],),
+                ).fetchall()
+                conn.close()
+            self._send(200, {"ok": True, "data": [dict(r) for r in rows]})
+            return
+
+        if method == "POST" and parts and parts[0] == "upload":
+            fields, code, msg = self._multipart_files()
+            if code != 200:
+                self._send(code, {"ok": False, "error": msg})
+                return
+            current = normalize_profile(_safe_json(user.get("profile_json"), {}))
+            items = []
+            plans = []
+            errors = []
+            for field in fields:
+                filename = getattr(field, "filename", "") or ""
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in (".pdf", ".docx", ".txt", ".md"):
+                    errors.append({"filename": filename, "error": "不支持的文件类型，仅支持 PDF/DOCX/TXT/MD"})
+                    continue
+                data = field.file.read(10 * 1024 * 1024 + 1)
+                if len(data) > 10 * 1024 * 1024:
+                    errors.append({"filename": filename, "error": "文件超过 10MB 上限"})
+                    continue
+                user_dir = RESUME_DIR / str(user["id"])
+                user_dir.mkdir(parents=True, exist_ok=True)
+                stored_name = secrets.token_hex(8) + ext
+                target = user_dir / stored_name
+                target.write_bytes(data)
+                saved = False
+                try:
+                    parsed = extract_resume_text(target)
+                    if parsed.get("warning"):
+                        raise ValueError(parsed["warning"])
+                    result = extract_profile_from_resume(parsed["text"], user["id"])
+                    plan = build_merge_plan(current, result["extracted"], result["confidence"])
+                    sources = result.get("source_text", {})
+                    for group in ("fills", "updates"):
+                        for item in plan.get(group, []):
+                            path = item["field_path"]
+                            if path in sources:
+                                item["source_text"] = sources[path]
+                    plan["unrecognized"] = result.get("unrecognized", [])
+                    plan["summary"] = result.get("summary", {})
+                    with _DB_LOCK:
+                        conn = db()
+                        cur = conn.execute(
+                            "INSERT INTO resumes (user_id, filename, stored_name, size) VALUES (?,?,?,?)",
+                            (user["id"], filename, stored_name, len(data)),
+                        )
+                        conn.commit()
+                        conn.close()
+                    items.append({"id": cur.lastrowid, "filename": filename, "size": len(data)})
+                    plans.append(plan)
+                    saved = True
+                except ValueError as exc:
+                    errors.append({"filename": filename, "error": str(exc)})
+                except RuntimeError as exc:
+                    errors.append({"filename": filename, "error": "简历解析失败：" + str(exc)})
+                finally:
+                    if not saved:
+                        try:
+                            if target.exists():
+                                target.unlink()
+                        except Exception:
+                            pass
+            if not items:
+                err = errors[0]["error"] if errors else "没有可导入的简历"
+                self._send(400, {"ok": False, "error": err})
+                return
+            plan = plans[-1] if plans else None
+            if plan is not None:
+                with _DB_LOCK:
+                    conn = db()
+                    conn.execute(
+                        "UPDATE resume_import_drafts SET status='discarded' WHERE user_id=? AND status='pending'",
+                        (user["id"],),
+                    )
+                    conn.execute(
+                        "INSERT INTO resume_import_drafts (user_id, merge_plan_json, status) VALUES (?,?, 'pending')",
+                        (user["id"], json.dumps(plan, ensure_ascii=False)),
+                    )
+                    conn.commit()
+                    conn.close()
+            with _DB_LOCK:
+                conn = db()
+                rows = conn.execute(
+                    "SELECT id, filename, size, created_at FROM resumes WHERE user_id=? ORDER BY id DESC",
+                    (user["id"],),
+                ).fetchall()
+                conn.close()
+            self._send(200, {
+                "ok": True,
+                "data": {
+                    "items": items,
+                    "plan": plan,
+                    "resumes": [dict(r) for r in rows],
+                    "errors": errors,
+                },
+            })
+            return
+
+        if method == "DELETE" and len(parts) == 1 and parts[0].isdigit():
+            resume_id = int(parts[0])
+            with _DB_LOCK:
+                conn = db()
+                row = conn.execute(
+                    "SELECT * FROM resumes WHERE id=? AND user_id=?", (resume_id, user["id"])
+                ).fetchone()
+                if row:
+                    conn.execute("DELETE FROM resumes WHERE id=?", (resume_id,))
+                    conn.commit()
+                conn.close()
+            if not row:
+                self._send(404, {"ok": False, "error": "简历不存在"})
+                return
+            try:
+                (RESUME_DIR / str(user["id"]) / row["stored_name"]).unlink(missing_ok=True)
+            except Exception:
+                pass
+            self._send(200, {"ok": True})
+            return
+
+        if method == "GET" and len(parts) == 2 and parts[0].isdigit() and parts[1] == "download":
+            resume_id = int(parts[0])
+            with _DB_LOCK:
+                conn = db()
+                row = conn.execute(
+                    "SELECT * FROM resumes WHERE id=? AND user_id=?", (resume_id, user["id"])
+                ).fetchone()
+                conn.close()
+            if not row:
+                self._send(404, {"ok": False, "error": "简历不存在"})
+                return
+            target = RESUME_DIR / str(user["id"]) / row["stored_name"]
+            if not target.exists():
+                self._send(404, {"ok": False, "error": "文件已被删除"})
+                return
+            quoted = urllib.parse.quote(row["filename"])
+            self._send(
+                200,
+                target.read_bytes(),
+                content_type="application/octet-stream",
+                extra={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"},
+            )
+            return
+
+        self._send(404, {"ok": False, "error": "not found"})
+
     def _session_token(self):
         return _cookie_value(self.headers.get("Cookie"), SESSION_COOKIE)
 
@@ -1451,6 +1637,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if head == "profile" and len(parts) >= 2 and parts[1] == "resume-import":
             return self._api_resume_import(method, parts[2:], user)
+
+        if head == "resumes":
+            return self._api_resumes(method, parts[1:], user)
 
         if head == "forms" and len(parts)>1 and parts[1]=="extract" and method=="POST":
             body=self._json_body(); self._send(200,{"ok":True,"data":extract_form(body.get("html",""),body.get("source_url", ""))}); return
@@ -1826,7 +2015,7 @@ class Handler(BaseHTTPRequestHandler):
         if action == "register" and method == "POST":
             body = self._json_body()
             username = (body.get("username") or "").strip()
-            email = (body.get("email") or "").strip() or None
+            email = (body.get("email") or "").strip().lower() or None
             password = body.get("password") or ""
             if not username:
                 self._send(400, {"ok": False, "error": "用户名不能为空"})
@@ -1837,7 +2026,7 @@ class Handler(BaseHTTPRequestHandler):
             with _DB_LOCK:
                 conn = db()
                 exists = conn.execute(
-                    "SELECT id FROM users WHERE username=? OR (email IS NOT NULL AND email=?)",
+                    "SELECT id FROM users WHERE username=? COLLATE NOCASE OR (email IS NOT NULL AND email=? COLLATE NOCASE)",
                     (username, email),
                 ).fetchone()
                 if exists:
@@ -1867,11 +2056,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with _DB_LOCK:
                 conn = db()
-                row = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+                row = conn.execute(
+                    "SELECT * FROM users WHERE username=? COLLATE NOCASE OR (email IS NOT NULL AND email=? COLLATE NOCASE)",
+                    (username, username),
+                ).fetchone()
                 conn.close()
             if not row or not row["password_hash"] or not verify_password(password, row["password_hash"]):
                 record_login_failure(rate_key)
-                self._send(400, {"ok": False, "error": "用户名或密码错误"})
+                self._send(400, {"ok": False, "error": "用户名或密码错误（支持用户名或邮箱，不区分大小写）"})
                 return
             clear_login_failures(rate_key)
             remember=bool(body.get("remember",True)); token = create_session(row["id"],2592000 if remember else None)
@@ -1915,7 +2107,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             body = self._json_body()
             username = (body.get("username") or "").strip()
-            email = (body.get("email") or "").strip() or None
+            email = (body.get("email") or "").strip().lower() or None
             password = body.get("password") or ""
             if not username:
                 self._send(400, {"ok": False, "error": "用户名不能为空"})
@@ -1926,7 +2118,7 @@ class Handler(BaseHTTPRequestHandler):
             with _DB_LOCK:
                 conn = db()
                 exists = conn.execute(
-                    "SELECT id FROM users WHERE id != ? AND (username=? OR (email IS NOT NULL AND email=?))",
+                    "SELECT id FROM users WHERE id != ? AND (username=? COLLATE NOCASE OR (email IS NOT NULL AND email=? COLLATE NOCASE))",
                     (user["id"], username, email),
                 ).fetchone()
                 if exists:
