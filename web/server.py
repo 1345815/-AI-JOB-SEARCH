@@ -57,6 +57,7 @@ PROFILE_FIELDS = {
     "portfolio", "github", "linkedin", "status", "location_preference",
     "career_goals", "notes", "highest_degree", "english_level", "target_role",
     "target_sectors", "target_city", "available_date",
+    "filter_keywords", "filter_exclude_keywords", "accept_internship", "min_match_score",
 }
 PROFILE_TEXT_LIMITS = {
     "name": 80, "email": 160, "phone": 40, "city": 80, "school": 160,
@@ -91,6 +92,19 @@ def normalize_profile(raw):
     for key in ("strong", "moderate", "weak"):
         value = profile["skills"].get(key, [])
         profile["skills"][key] = [value] if isinstance(value, str) else (value if isinstance(value, list) else [])
+    for key in ("filter_keywords", "filter_exclude_keywords"):
+        value = profile.get(key, [])
+        if isinstance(value, str):
+            value = value.replace("，", ",").replace("、", ",").replace("\n", ",")
+            profile[key] = [x.strip() for x in value.split(",") if x.strip()]
+        elif not isinstance(value, list):
+            profile[key] = []
+    if "accept_internship" not in profile:
+        profile["accept_internship"] = True
+    try:
+        profile["min_match_score"] = int(profile.get("min_match_score", 0) or 0)
+    except (TypeError, ValueError):
+        profile["min_match_score"] = 0
     return profile
 
 
@@ -629,6 +643,34 @@ def _contains(text, keywords):
     return [k for k in keywords if k in text]
 
 
+def quick_prefilter(job, profile=None):
+    """BossHunter 风格的轻量预筛：先给出可解释信号，再进入完整匹配评分。"""
+    profile = profile or {}
+    text = _text_of(job)
+    reasons, hits = [], []
+    excluded = _contains(text, profile.get("filter_exclude_keywords", []))
+    if excluded:
+        return {"status": "reject", "label": "不建议", "reasons": ["命中一票否决词：" + "、".join(excluded[:5])], "hits": [], "excluded": excluded}
+    keywords = profile.get("filter_keywords", []) or []
+    if not keywords:
+        keywords = ([profile.get("target_role", "")] + profile.get("target_roles", []) + profile.get("target_sectors", []) + profile.get("career_goals", []))
+    keywords = [str(k).strip() for k in keywords if str(k).strip()]
+    for keyword in keywords:
+        if keyword.lower() in _norm(text):
+            hits.append(keyword)
+    if hits:
+        reasons.append("命中目标方向：" + "、".join(hits[:5]))
+    target_city = profile.get("target_city") or (profile.get("target_cities") or [""])[0]
+    if target_city and job.get("city") and target_city not in job.get("city", "") and "全国" not in str(target_city):
+        reasons.append("城市与意向不完全一致：" + str(job.get("city")))
+    if not profile.get("accept_internship", True) and "实习" in text:
+        reasons.append("个人设置暂不接受实习岗位")
+    if job.get("is_demo") or not job.get("url"):
+        reasons.append("缺少可核验的真实岗位链接")
+    status = "recommend" if hits and not any("不完全一致" in r or "不接受" in r for r in reasons) else "review"
+    return {"status": status, "label": "推荐" if status == "recommend" else "需要核实", "reasons": reasons or ["未设置预筛条件，建议人工核实岗位"], "hits": hits, "excluded": []}
+
+
 def profile_is_empty(profile):
     if not profile:
         return True
@@ -641,6 +683,7 @@ def gates(job, profile=None):
     profile = profile or {}
     text = _text_of(job)
     results = []
+    prefilter = quick_prefilter(job, profile)
     blocked = False
 
     if _contains(text, ["社招", "仅限社招"]):
@@ -671,7 +714,7 @@ def gates(job, profile=None):
     else:
         results.append({"name": "地点", "status": "pass", "note": "岗位地点可接受"})
 
-    return {"blocked": blocked, "items": results}
+    return {"blocked": blocked, "items": results, "prefilter": prefilter}
 
 
 def _dimension_score(text, keywords):
@@ -776,6 +819,11 @@ def score_job(job, profile=None):
         career_score = 30
 
     overall = round(skill_score * 0.30 + exp_score * 0.25 + culture_score * 0.15 + career_score * 0.30)
+    min_score = int(profile.get("min_match_score", 0) or 0)
+    if min_score and overall < min_score:
+        gate["prefilter"]["status"] = "reject"
+        gate["prefilter"]["label"] = "不建议"
+        gate["prefilter"]["reasons"] = list(gate["prefilter"].get("reasons", [])) + [f"综合匹配分 {overall} 低于个人阈值 {min_score}"]
     if overall >= 75:
         verdict = "强烈建议申请"
     elif overall >= 60:

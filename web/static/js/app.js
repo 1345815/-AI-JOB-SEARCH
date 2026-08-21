@@ -171,6 +171,8 @@
     var scoreText = needs ? "—" : score;
     var demo = job.is_demo ? '<span class="tag">示例岗位</span>' : "";
     var source = job.source ? '<span class="tag tag-info">' + esc(job.source === "llm_suggested" ? "LLM 建议" : job.source === "local" ? "本地筛选" : job.source === "web_search" ? "🌐 实时抓取" : job.source) + '</span>' : "";
+    var prefilter = ev.gates && ev.gates.prefilter;
+    var prefilterTag = prefilter ? '<span class="tag ' + (prefilter.status === "recommend" ? "tag-accent" : prefilter.status === "reject" ? "tag-danger" : "tag-warn") + '">' + esc(prefilter.label) + '</span>' : "";
     var deadline = job.deadline
       ? '<span class="tag ' + (job.deadline < new Date().toISOString().slice(0, 10) ? "tag-danger" : "tag-warn") + '">截止 ' + esc(job.deadline) + "</span>"
       : "";
@@ -186,7 +188,7 @@
       '<div class="list-row job-item' + (state.selectedJobId === job.id && !searchResult ? " selected" : "") + '" data-job="' + esc(job.id) + '"' + (searchResult ? ' data-search-result="true"' : "") + ">" +
       '<span class="score-badge ' + cls + '">' + scoreText + "</span>" +
       '<div class="row-main">' +
-      '<div class="row-title-wrap"><span class="row-title">' + esc(job.title) + "</span>" + demo + source + "</div>" +
+      '<div class="row-title-wrap"><span class="row-title">' + esc(job.title) + "</span>" + demo + source + prefilterTag + "</div>" +
       '<div class="row-sub">' + esc(job.company) + " · " + esc(job.city) + " · " + esc(job.salary || "薪资未标注") + "</div>" +
       "</div>" +
       '<div class="row-meta">' + deadline + searchAction + "</div>" +
@@ -689,6 +691,7 @@
     var score = ev.overall || 0;
     var needs = !!ev.needs_profile;
     var gates = ev.gates || { items: [] };
+    var prefilter = gates.prefilter;
     var app = state.applications.find(function (a) { return a.job_id === job.id; });
     var gateTags = gates.items.map(function (g) {
       var cls = g.status === "pass" ? "tag-accent" : g.status === "warn" ? "tag-warn" : "tag-danger";
@@ -716,6 +719,7 @@
       "</div>" +
       '<div class="detail-sections">' +
       '<div class="detail-section"><h3>下一步行动</h3><div class="text-mid">' + esc(nextAction(job, ev, app)) + '</div></div>' +
+      (prefilter ? '<div class="detail-section"><h3>快速预筛（人工确认前）</h3><div class="text-mid"><span class="tag ' + (prefilter.status === "recommend" ? "tag-accent" : prefilter.status === "reject" ? "tag-danger" : "tag-warn") + '">' + esc(prefilter.label) + '</span> ' + esc((prefilter.reasons || []).join("；")) + '</div></div>' : '') +
       '<div class="detail-section"><h3>五维评估</h3>' + barChart(ev) + "</div>" +
       (needs
         ? '<div class="detail-section"><h3>个性化匹配</h3><div class="muted text-mid">完善档案后，这里会显示你的技能、经历、文化与职业方向匹配分析。</div></div>'
@@ -1031,12 +1035,16 @@
       '<div class="panel-body"><div id="resumeListPanel"><div class="loading"><div class="spinner"></div></div></div></div></div>' +
       '<div id="resumeSummaryPanel"></div>' +
       '<div id="resumeMergePanel"></div>' +
-      '<div class="panel mb-14 profile-section" id="profile-section-intent"><div class="panel-head"><strong>补充求职意向</strong><span class="sub">可选，填好后岗位评分更准</span></div>' +
+      '<div class="panel mb-14 profile-section" id="profile-section-intent"><div class="panel-head"><strong>补充求职意向</strong><span class="sub">可选，填好后岗位预筛和评分更准</span></div>' +
       '<div class="panel-body profile-editor"><div class="form-grid">' +
       field("目标岗位", "profileTargetRole", p.target_role || "AI 产品运营 / AI 游戏策划") +
       field("目标方向", "profileTargetSector", (p.target_sectors || []).join("、")) +
       field("期望城市", "profileTargetCity", p.target_city || p.city || "") +
       field("可入职时间", "profileAvailableDate", p.available_date || "") +
+      field("预筛关键词", "profileFilterKeywords", (p.filter_keywords || []).join("、"), "命中后标记推荐") +
+      field("一票否决词", "profileFilterExclude", (p.filter_exclude_keywords || []).join("、"), "如：外包、纯销售、3年以上") +
+      field("最低匹配分", "profileMinScore", p.min_match_score || "", "仅作为提醒，不会自动删除岗位") +
+      '<label class="field"><span>接受实习</span><select id="profileAcceptInternship"><option value="1"' + (p.accept_internship !== false ? " selected" : "") + '>接受</option><option value="0"' + (p.accept_internship === false ? " selected" : "") + '>暂不接受</option></select></label>' +
       '</div><div class="form-actions"><button class="btn btn-primary" id="saveIntent">保存求职意向</button></div></div></div>' +
       '<div class="panel profile-section" id="advancedProfilePanel"><div class="panel-head"><strong>完整档案（高级）</strong><span class="sub">简历识别后会自动填入，需要时再展开手工修改</span>' +
       '<button class="btn btn-sm" id="toggleAdvanced">' + (state.advancedExpanded ? "收起编辑" : "展开编辑") + '</button></div>' +
@@ -1502,6 +1510,10 @@
       target_sectors: el("profileTargetSector") ? el("profileTargetSector").value.split(/[、,，\n]/).map(function (s) { return s.trim(); }).filter(Boolean) : [],
       target_city: el("profileTargetCity") ? el("profileTargetCity").value.trim() : "",
       available_date: el("profileAvailableDate") ? el("profileAvailableDate").value.trim() : "",
+      filter_keywords: el("profileFilterKeywords") ? splitProfileItems(el("profileFilterKeywords").value) : [],
+      filter_exclude_keywords: el("profileFilterExclude") ? splitProfileItems(el("profileFilterExclude").value) : [],
+      min_match_score: el("profileMinScore") ? Math.max(0, Math.min(100, Number(el("profileMinScore").value) || 0)) : 0,
+      accept_internship: el("profileAcceptInternship") ? el("profileAcceptInternship").value !== "0" : true,
       experiences: experiences,
       projects: projects
     };
