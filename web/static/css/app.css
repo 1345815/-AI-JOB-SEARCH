@@ -843,6 +843,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .advanced-title button { margin-left:auto; }
 .form-actions { display:flex; justify-content:flex-end; margin-top:12px; }
 .job-entry-title { font-size:15px; font-weight:700; color:var(--text); margin-bottom:8px; }
+.search-mode-switch { display:flex; align-items:center; gap:6px; margin-bottom:8px; }
 .job-entry-hint { color:var(--text-3); font-size:12px; margin:2px 0 10px; }
 .real-job-guide { display:flex; flex-direction:column; gap:6px; align-items:center; padding:30px 18px; text-align:center; color:var(--text-2); }
 .real-job-guide strong { color:var(--accent-ink); font-size:15px; }

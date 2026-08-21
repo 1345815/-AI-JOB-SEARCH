@@ -21,6 +21,8 @@
     searchHistory: [],
     searchMode: null,
     advancedExpanded: false,
+    jobSearchMode: "local",
+    onlineSearchAvailable: false,
     interviewJobId: null,
     interviewContent: "",
     chatOpen: false,
@@ -416,7 +418,8 @@
       '<div class="page-head"><div><h1>找真实岗位</h1><p>优先使用真实招聘信息，再用你的档案进行匹配评分。</p></div></div>' +
       '<div class="panel job-parse-bar mb-14"><div class="panel-body">' +
       '<div class="job-entry-title">三种方式找到真实岗位</div>' +
-      '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><input id="onlineSearchKeyword" type="text" style="flex:1;min-width:220px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="例如：AI产品运营、游戏策划、模型评测"><button class="btn btn-primary" id="btnOnlineSearch">联网搜索</button><span class="tag" id="aiModeBadge">检测中…</span></div>' +
+      '<div class="search-mode-switch" role="group" aria-label="搜索模式"><button class="btn btn-sm' + (state.jobSearchMode === "local" ? " btn-primary" : "") + '" id="modeLocal">本地模式</button><button class="btn btn-sm' + (state.jobSearchMode === "online" ? " btn-primary" : "") + '" id="modeOnline">线上模式</button><span class="tag" id="aiModeBadge">检测中…</span></div>' +
+      '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><input id="onlineSearchKeyword" type="text" style="flex:1;min-width:220px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="例如：AI产品运营、游戏策划、模型评测"><button class="btn btn-primary" id="btnOnlineSearch">搜索岗位</button></div>' +
       '<div class="job-entry-hint">① 输入关键词联网搜索　② 输入公司名按公司搜索　③ 粘贴岗位网址快速解析</div>' +
       (state.searchHistory.length ? '<div class="flex" style="gap:6px;flex-wrap:wrap;margin-bottom:10px"><span class="muted text-sm">最近搜索</span>' + state.searchHistory.map(function (keyword) { return '<button class="btn btn-sm" data-search-history="' + esc(keyword) + '">' + esc(keyword) + "</button>"; }).join("") + "</div>" : "") +
       '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
@@ -468,17 +471,31 @@
   }
 
   function bindOnlineSearch() {
-    var btn = el("btnOnlineSearch"), badge = el("aiModeBadge");
+    var btn = el("btnOnlineSearch"), badge = el("aiModeBadge"), localBtn = el("modeLocal"), onlineBtn = el("modeOnline");
     if (!btn) return;
+    if (localBtn) localBtn.addEventListener("click", function () { state.jobSearchMode = "local"; renderJobs(); });
+    if (onlineBtn) onlineBtn.addEventListener("click", function () { state.jobSearchMode = "online"; renderJobs(); });
     api("jobs/search").then(function (res) {
       var data = res.data; btn.disabled = false;
-      badge.textContent = data.enabled ? "AI 模式已开启 · " + data.provider : "本地搜索模式";
-      btn.textContent = data.enabled ? "联网搜索（AI 模式）" : "搜索岗位（本地模式）";
-      btn.title = data.enabled ? "" : "当前从内置岗位库筛选；开启 AI 后可获得更多建议";
+      state.onlineSearchAvailable = !!data.enabled;
+      badge.textContent = data.enabled ? "线上服务可用 · " + data.provider : "线上服务未配置";
+      btn.textContent = state.jobSearchMode === "online" ? "联网搜索" : "搜索本地岗位";
+      btn.title = data.enabled ? "" : "线上模式需要先在设置中配置 AI 服务";
+      if (state.jobSearchMode === "online" && !data.enabled) badge.textContent = "线上服务未配置，请先到设置开启";
     });
     var runSearch = function (keywords) {
       keywords = (keywords || "").trim();
       if (!keywords) return;
+      if (state.jobSearchMode === "local") {
+        state.jobFilter = keywords;
+        state.searchResults = [];
+        state.searchMode = "local";
+        return loadJobs().then(renderJobs);
+      }
+      if (!state.onlineSearchAvailable) {
+        toast("线上模式尚未配置，请先到设置中开启 AI 服务", "error");
+        return;
+      }
       btn.disabled = true;
       var originalText = btn.textContent;
       btn.textContent = "搜索中…";
