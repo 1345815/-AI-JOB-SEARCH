@@ -20,6 +20,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import urllib.parse
 from email import policy
@@ -51,6 +52,7 @@ LOGIN_RATE_WINDOW_SECONDS = int(os.environ.get("LOGIN_RATE_WINDOW_SECONDS", "900
 _DB_LOCK = threading.RLock()
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_FAILURES = {}
+_LLM_LAST_ERROR = ""
 
 PROFILE_FIELDS = {
     "name", "email", "phone", "city", "school", "major", "graduation_date",
@@ -188,6 +190,24 @@ def load_settings():
 def save_settings(settings):
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     _write_utf8(SETTINGS_FILE, json.dumps(settings, ensure_ascii=False, indent=2))
+
+
+def normalize_llm_base_url(value):
+    raw = (value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        host = (parsed.hostname or "").lower()
+        if host == "platform.deepseek.com":
+            return "https://api.deepseek.com/v1"
+        path = parsed.path.rstrip("/")
+        for suffix in ("/chat/completions", "/models"):
+            if path.endswith(suffix):
+                path = path[:-len(suffix)]
+        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path or "/v1", "", "")).rstrip("/")
+    except ValueError:
+        return raw
 
 
 def load_seed_jobs():
@@ -1254,6 +1274,8 @@ def generate_interview_prep(job, profile=None):
 # ---------------------------------------------------------------- LLM 增强
 
 def llm_chat(messages, system=None):
+    global _LLM_LAST_ERROR
+    _LLM_LAST_ERROR = ""
     settings = load_settings()
     if not settings.get("enabled") or not settings.get("api_key") or not settings.get("base_url"):
         return None
@@ -1278,7 +1300,16 @@ def llm_chat(messages, system=None):
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
-    except Exception:
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read(600).decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        _LLM_LAST_ERROR = "HTTP " + str(exc.code) + ("：" + detail[:220] if detail else "")
+        return None
+    except Exception as exc:
+        _LLM_LAST_ERROR = str(exc)[:240]
         return None
 
 
@@ -1287,13 +1318,36 @@ def llm_probe():
     settings = load_settings()
     if not settings.get("enabled") or not settings.get("api_key") or not settings.get("base_url"):
         return {"ok": False, "status": "未配置", "message": "请填写 API 地址、API Key，并开启 AI 增强。"}
+    base = normalize_llm_base_url(settings.get("base_url"))
+    if base != settings.get("base_url"):
+        return {"ok": False, "status": "地址需要修正", "message": "当前地址像是网页或 Key 管理页面，不是模型 API。建议使用：" + base, "suggested_base_url": base}
     try:
         text = llm_chat([{"role": "user", "content": "只回复：连接成功"}], system="你是连接测试助手。")
         if text:
             return {"ok": True, "status": "已连接", "message": "模型已成功返回响应。", "model": settings.get("model") or "默认模型"}
-        return {"ok": False, "status": "连接失败", "message": "服务没有返回有效响应，请检查地址、Key 和模型名称。"}
+        detail = _LLM_LAST_ERROR
+        return {"ok": False, "status": "连接失败", "message": (detail + "。" if detail else "服务没有返回有效响应。") + "请检查 API 地址是否以 /v1 结尾、Key 是否有效、模型是否存在。"}
     except Exception as exc:
-        return {"ok": False, "status": "连接失败", "message": str(exc)[:180]}
+        return {"ok": False, "status": "连接失败", "message": str(exc)[:240]}
+
+
+def llm_models():
+    settings = load_settings()
+    if not settings.get("enabled") or not settings.get("api_key") or not settings.get("base_url"):
+        return {"ok": False, "status": "未配置", "message": "请先保存 API 地址和 Key。", "models": []}
+    base = normalize_llm_base_url(settings.get("base_url"))
+    if base != settings.get("base_url"):
+        return {"ok": False, "status": "地址需要修正", "message": "请使用模型 API 地址，而不是网页地址。建议：" + base, "models": []}
+    req = urllib.request.Request(base.rstrip("/") + "/models", headers={"Authorization": "Bearer " + settings["api_key"]}, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        models = [str(item.get("id")) for item in payload.get("data", []) if isinstance(item, dict) and item.get("id")]
+        return {"ok": True, "status": "已识别", "message": "已从服务端读取可用模型。", "models": models}
+    except urllib.error.HTTPError as exc:
+        return {"ok": False, "status": "识别失败", "message": "模型列表请求返回 HTTP " + str(exc.code) + "，请检查 Key 和 API 地址。", "models": []}
+    except Exception as exc:
+        return {"ok": False, "status": "识别失败", "message": str(exc)[:240], "models": []}
 
 
 def local_assistant(user_text, profile=None):
@@ -1807,7 +1861,7 @@ class Handler(BaseHTTPRequestHandler):
                 settings["api_key"] = body["api_key"]
             elif "api_key" in body and not body.get("api_key"):
                 settings["api_key"] = ""
-            settings["base_url"] = body.get("base_url", settings["base_url"])
+            settings["base_url"] = normalize_llm_base_url(body.get("base_url", settings["base_url"]))
             settings["model"] = body.get("model", settings["model"])
             settings["enabled"] = bool(body.get("enabled", settings["enabled"]))
             save_settings(settings)
@@ -1819,6 +1873,9 @@ class Handler(BaseHTTPRequestHandler):
         if head == "settings" and len(parts) >= 2 and parts[1] == "test" and method == "POST":
             result = llm_probe()
             self._send(200, {"ok": True, "data": result})
+            return
+        if head == "settings" and len(parts) >= 2 and parts[1] == "models" and method == "POST":
+            self._send(200, {"ok": True, "data": llm_models()})
             return
 
         if head == "jobs" and len(parts) == 1 and method == "GET":

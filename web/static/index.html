@@ -182,9 +182,9 @@
           <p class="muted">开启后可接入 OpenAI 兼容 API（DeepSeek、Ollama、OpenAI 等），用于增强评估报告、简历、求职信与对话。不配置也能使用全部本地功能。</p>
           <p class="resume-privacy">你的 API Key 仅以掩码显示，不会回传到页面。调用会产生服务商费用；AI 生成内容和岗位建议可能出错，投递前请核实岗位链接、截止日期与个人信息。</p>
           <label class="field"><span>启用 AI 增强</span><label class="switch"><input type="checkbox" id="llmEnabled"><span class="switch-track"></span></label></label>
-          <label class="field"><span>API 地址</span><input id="llmBase" type="text" placeholder="https://api.deepseek.com/v1"></label>
+          <label class="field"><span>API 地址</span><input id="llmBase" type="text" placeholder="https://api.deepseek.com/v1"><small class="muted">DeepSeek 推荐：<code>https://api.deepseek.com/v1</code>；不要填 platform.deepseek.com/api_keys</small></label>
           <label class="field"><span>API Key</span><input id="llmKey" type="password" placeholder="sk-..."></label>
-          <label class="field"><span>模型名称</span><input id="llmModel" type="text" placeholder="deepseek-chat"></label>
+          <label class="field"><span>模型名称</span><div class="flex" style="gap:8px"><input id="llmModel" list="llmModelOptions" type="text" placeholder="deepseek-chat" style="flex:1"><button class="btn btn-sm" id="detectModels" type="button">自动识别模型</button></div><datalist id="llmModelOptions"></datalist></label>
           <div id="llmTestStatus" class="muted" role="status" aria-live="polite">尚未测试连接。保存后建议先测试一次。</div>
           <div class="modal-actions">
             <button class="btn" data-close="settingsModal">取消</button>
