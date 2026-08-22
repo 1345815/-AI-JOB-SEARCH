@@ -1269,6 +1269,20 @@ def llm_chat(messages, system=None):
         return None
 
 
+def llm_probe():
+    """真实探测 OpenAI 兼容服务，不返回密钥；只用于用户主动点击测试。"""
+    settings = load_settings()
+    if not settings.get("enabled") or not settings.get("api_key") or not settings.get("base_url"):
+        return {"ok": False, "status": "未配置", "message": "请填写 API 地址、API Key，并开启 AI 增强。"}
+    try:
+        text = llm_chat([{"role": "user", "content": "只回复：连接成功"}], system="你是连接测试助手。")
+        if text:
+            return {"ok": True, "status": "已连接", "message": "模型已成功返回响应。", "model": settings.get("model") or "默认模型"}
+        return {"ok": False, "status": "连接失败", "message": "服务没有返回有效响应，请检查地址、Key 和模型名称。"}
+    except Exception as exc:
+        return {"ok": False, "status": "连接失败", "message": str(exc)[:180]}
+
+
 def local_assistant(user_text, profile=None):
     profile = profile or {}
     text = _norm(user_text)
@@ -1785,6 +1799,10 @@ class Handler(BaseHTTPRequestHandler):
             public.pop("api_key", None)
             public["has_key"] = bool(settings.get("api_key"))
             self._send(200, public)
+            return
+        if head == "settings" and len(parts) >= 2 and parts[1] == "test" and method == "POST":
+            result = llm_probe()
+            self._send(200, {"ok": True, "data": result})
             return
 
         if head == "jobs" and len(parts) == 1 and method == "GET":

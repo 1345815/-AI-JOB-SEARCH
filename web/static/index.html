@@ -185,8 +185,10 @@
           <label class="field"><span>API 地址</span><input id="llmBase" type="text" placeholder="https://api.deepseek.com/v1"></label>
           <label class="field"><span>API Key</span><input id="llmKey" type="password" placeholder="sk-..."></label>
           <label class="field"><span>模型名称</span><input id="llmModel" type="text" placeholder="deepseek-chat"></label>
+          <div id="llmTestStatus" class="muted" role="status" aria-live="polite">尚未测试连接。保存后建议先测试一次。</div>
           <div class="modal-actions">
             <button class="btn" data-close="settingsModal">取消</button>
+            <button class="btn" id="testSettings">测试 AI 连接</button>
             <button class="btn btn-primary" id="saveSettings">保存设置</button>
           </div>
         </div>

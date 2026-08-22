@@ -23,6 +23,7 @@
     advancedExpanded: false,
     jobSearchMode: "local",
     onlineSearchAvailable: false,
+    onlineSearchVerified: false,
     interviewJobId: null,
     interviewContent: "",
     chatOpen: false,
@@ -521,6 +522,7 @@
     api("jobs/search").then(function (res) {
       var data = res.data; btn.disabled = false;
       state.onlineSearchAvailable = !!data.enabled;
+      state.onlineSearchVerified = false;
       badge.textContent = data.enabled ? "线上服务可用 · " + data.provider : "线上服务未配置";
       btn.textContent = state.jobSearchMode === "online" ? "联网搜索" : "搜索本地岗位";
       btn.title = data.enabled ? "" : "线上模式需要先在设置中配置 AI 服务";
@@ -537,6 +539,11 @@
       }
       if (!state.onlineSearchAvailable) {
         toast("线上模式尚未配置，请先到设置中开启 AI 服务", "error");
+        return;
+      }
+      if (!state.onlineSearchVerified) {
+        toast("正在验证 AI 服务连接，请稍候…", "info");
+        verifyAiConnection().then(function (ok) { if (ok) runSearch(keywords); });
         return;
       }
       btn.disabled = true;
@@ -1636,6 +1643,24 @@
     }
   }
 
+  async function verifyAiConnection() {
+    var badge = el("aiModeBadge"), status = el("llmTestStatus");
+    try {
+      var result = await api("settings/test", { method: "POST", body: {} });
+      var data = result.data || {};
+      state.onlineSearchVerified = !!data.ok;
+      if (badge && data.ok) badge.textContent = "AI 服务已验证 · " + (data.model || "模型");
+      if (status) { status.textContent = data.status + "：" + data.message; status.className = data.ok ? "text-success" : "resume-error"; }
+      if (!data.ok) toast(data.message, "error");
+      return !!data.ok;
+    } catch (e) {
+      state.onlineSearchVerified = false;
+      if (status) { status.textContent = "连接测试失败：" + e.message; status.className = "resume-error"; }
+      toast("AI 连接测试失败：" + e.message, "error");
+      return false;
+    }
+  }
+
   async function saveSettings() {
     var body = {
       enabled: el("llmEnabled").checked,
@@ -1645,6 +1670,8 @@
     };
     try {
       state.settings = await api("settings", { method: "PUT", body: body });
+      state.onlineSearchAvailable = !!(state.settings.enabled && state.settings.has_key && state.settings.base_url);
+      state.onlineSearchVerified = false;
       updateModePill();
       el("settingsModal").classList.remove("open");
       toast("设置已保存", "success");
@@ -1797,6 +1824,11 @@
     el("chatSuggestions").addEventListener("click", function (e) { if (e.target.tagName === "BUTTON") sendChat(e.target.textContent); });
     el("settingsToggle").addEventListener("click", openSettings);
     el("saveSettings").addEventListener("click", saveSettings);
+    el("testSettings").addEventListener("click", async function () {
+      var button = el("testSettings");
+      button.disabled = true; button.textContent = "测试中…";
+      try { await verifyAiConnection(); } finally { button.disabled = false; button.textContent = "测试 AI 连接"; }
+    });
     el("addJobBtn").addEventListener("click", openAddJob);
     el("saveJob").addEventListener("click", saveJob);
     el("profileBannerBtn").addEventListener("click", function () { location.hash = "#/profile"; });
