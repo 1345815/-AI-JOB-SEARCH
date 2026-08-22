@@ -169,8 +169,9 @@
     var needs = !!ev.needs_profile;
     var cls = needs ? "zero" : scoreClass(score);
     var scoreText = needs ? "—" : score;
+    var trust = jobTrust(job);
     var demo = job.is_demo ? '<span class="tag">示例岗位</span>' : "";
-    var source = job.source ? '<span class="tag tag-info">' + esc(job.source === "llm_suggested" ? "LLM 建议" : job.source === "local" ? "本地筛选" : job.source === "web_search" ? "🌐 实时抓取" : job.source) + '</span>' : "";
+    var source = '<span class="tag ' + trust.cls + '">' + esc(trust.label) + '</span>';
     var prefilter = ev.gates && ev.gates.prefilter;
     var prefilterTag = prefilter ? '<span class="tag ' + (prefilter.status === "recommend" ? "tag-accent" : prefilter.status === "reject" ? "tag-danger" : "tag-warn") + '">' + esc(prefilter.label) + '</span>' : "";
     var deadline = job.deadline
@@ -202,6 +203,27 @@
       '<div class="stat-value ' + cls + '">' + value + "</div>" +
       '<div class="stat-foot">' + esc(foot) + "</div></div>"
     );
+  }
+
+  function jobTrust(job) {
+    if (job.is_demo) return { label: "示例，仅供熟悉", cls: "tag-warn" };
+    if (job.source === "llm_suggested") return { label: "AI 建议，需核实", cls: "tag-warn" };
+    if (job.url && /^https?:\/\//i.test(job.url)) return { label: "链接已验证", cls: "tag-accent" };
+    return { label: "来源待核实", cls: "tag-warn" };
+  }
+
+  function actionJobs() {
+    var today = new Date().toISOString().slice(0, 10);
+    return state.jobs.filter(function (job) {
+      var ev = job.evaluation || {}, pf = ev.gates && ev.gates.prefilter;
+      var applied = state.applications.some(function (a) { return a.job_id === job.id && a.stage !== "已归档"; });
+      return !job.is_demo && job.url && !applied && (!pf || pf.status !== "reject") && (!job.deadline || job.deadline >= today);
+    }).sort(function (a, b) {
+      var as = (a.evaluation || {}).overall || 0, bs = (b.evaluation || {}).overall || 0;
+      if (a.deadline && !b.deadline) return -1;
+      if (b.deadline && !a.deadline) return 1;
+      return bs - as;
+    }).slice(0, 3);
   }
 
   function emptyBlock(title, sub) {
@@ -325,11 +347,19 @@
       ? jobs.slice().sort(function (a, b) { return (b.created_at || "").localeCompare(a.created_at || ""); }).slice(0, 6)
       : jobs.slice().sort(function (a, b) { return (b.evaluation || {}).overall - (a.evaluation || {}).overall; }).slice(0, 6);
     var recentApps = apps.slice().slice(0, 6);
+    var todayJobs = actionJobs();
+    var todayActions = todayJobs.length
+      ? '<div class="panel mb-14"><div class="panel-head"><strong>今天先处理这 ' + todayJobs.length + ' 个岗位</strong><span class="sub">按链接可信度、匹配度和截止日期排序</span></div><div class="list">' + todayJobs.map(function (job) {
+        var ev = job.evaluation || {}, trust = jobTrust(job), pf = ev.gates && ev.gates.prefilter;
+        return '<div class="list-row"><span class="score-badge ' + scoreClass(ev.overall || 0) + '">' + (ev.overall || "—") + '</span><div class="row-main"><div class="row-title">' + esc(job.title) + '</div><div class="row-sub">' + esc(job.company) + ' · ' + esc(job.city || "地点待确认") + ' · ' + '<span class="tag ' + trust.cls + '">' + esc(trust.label) + '</span>' + (job.deadline ? ' · 截止 ' + esc(job.deadline) : '') + '</div><div class="muted text-sm">' + esc((pf && pf.reasons && pf.reasons[0]) || (ev.summary || "打开岗位详情，确认要求后开始申请")) + '</div></div><button class="btn btn-sm btn-primary" data-open-job="' + esc(job.id) + '">查看并处理</button></div>';
+      }).join('') + '</div></div>'
+      : '<div class="panel mb-14"><div class="panel-head"><strong>今天的求职行动</strong></div><div class="panel-body"><div class="empty"><strong>还没有可直接处理的真实岗位</strong><span>去「找真实岗位」搜索并核实链接，加入岗位库后这里会自动生成今日清单。</span><button class="btn btn-primary mt-8" data-open-jobs>去找岗位</button></div></div></div>';
 
     el("content").innerHTML =
       '<div class="content-inner">' +
       '<div class="page-head"><div><h1>求职总览</h1><p>你的 AI 求职工作台：跟踪岗位匹配、申请进度与面试准备。</p></div></div>' +
       (empty ? '<div class="panel mb-14"><div class="panel-head"><strong>从这里开始</strong><span class="sub">完成后即可获得更准确的岗位推荐</span></div><div class="panel-body"><div class="onboarding"><button class="onboarding-step" data-onboard="profile"><b>1</b><span><strong>完善校园档案</strong><small>学校、专业、毕业时间和求职城市</small></span></button><button class="onboarding-step" data-onboard="profile"><b>2</b><span><strong>上传简历</strong><small>识别后逐项确认写入</small></span></button><button class="onboarding-step" data-onboard="jobs"><b>3</b><span><strong>搜索岗位</strong><small>筛选岗位并查看匹配度</small></span></button><button class="onboarding-step" data-onboard="pipeline"><b>4</b><span><strong>跟踪投递</strong><small>收藏、投递、面试和 Offer</small></span></button></div></div></div>' : '') +
+      todayActions +
       '<div class="stat-grid">' +
       statCard("岗位池", jobs.length, "stat-accent", "内置 + 手动录入") +
       statCard("平均匹配度", empty ? "—" : avg, "stat-info", empty ? "完善档案后启用个性化匹配" : "按五维框架评分") +
@@ -358,6 +388,16 @@
     bindJobItems();
     document.querySelectorAll("[data-onboard]").forEach(function (button) {
       button.addEventListener("click", function () { location.hash = "#/" + button.getAttribute("data-onboard"); });
+    });
+    document.querySelectorAll("[data-open-job]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.selectedJobId = button.getAttribute("data-open-job");
+        state.view = "jobs";
+        location.hash = "#/jobs";
+      });
+    });
+    document.querySelectorAll("[data-open-jobs]").forEach(function (button) {
+      button.addEventListener("click", function () { state.view = "jobs"; location.hash = "#/jobs"; });
     });
   }
 
@@ -421,8 +461,8 @@
       '<div class="panel job-parse-bar mb-14"><div class="panel-body">' +
       '<div class="job-entry-title">三种方式找到真实岗位</div>' +
       '<div class="search-mode-switch" role="group" aria-label="搜索模式"><button class="btn btn-sm' + (state.jobSearchMode === "local" ? " btn-primary" : "") + '" id="modeLocal">本地模式</button><button class="btn btn-sm' + (state.jobSearchMode === "online" ? " btn-primary" : "") + '" id="modeOnline">线上模式</button><span class="tag" id="aiModeBadge">检测中…</span></div>' +
-      '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><input id="onlineSearchKeyword" type="text" style="flex:1;min-width:220px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="例如：AI产品运营、游戏策划、模型评测"><button class="btn btn-primary" id="btnOnlineSearch">搜索岗位</button></div>' +
-      '<div class="job-entry-hint">① 输入关键词联网搜索　② 输入公司名按公司搜索　③ 粘贴岗位网址快速解析</div>' +
+      '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px"><input id="onlineSearchKeyword" type="text" style="flex:1;min-width:220px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="例如：AI产品运营、游戏策划、模型评测"><button class="btn btn-primary" id="btnOnlineSearch">搜索候选岗位</button></div>' +
+      '<div class="job-entry-hint">① 本地模式：筛选已有岗位　② AI 模式：生成候选并标注“需核实”　③ 公司搜索 / 岗位网址：优先获取真实链接</div>' +
       (state.searchHistory.length ? '<div class="flex" style="gap:6px;flex-wrap:wrap;margin-bottom:10px"><span class="muted text-sm">最近搜索</span>' + state.searchHistory.map(function (keyword) { return '<button class="btn btn-sm" data-search-history="' + esc(keyword) + '">' + esc(keyword) + "</button>"; }).join("") + "</div>" : "") +
       '<div class="flex" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
       '<input id="companySearchName" type="text" style="flex:1;min-width:200px;min-height:36px;padding:0 12px;border:1px solid var(--border-strong);border-radius:6px;outline:none" placeholder="心仪公司名，如：网易" value="' + esc(state.companySearch || "") + '">' +
@@ -710,7 +750,7 @@
       '<span class="tag">' + esc(job.work_type) + "</span>" +
       '<span class="tag">' + esc(job.salary || "薪资未标注") + "</span>" +
       (job.deadline ? '<span class="tag ' + deadlineClass(job.deadline) + '">截止 ' + esc(job.deadline) + "</span>" : '<span class="tag">未标注截止日期</span>') +
-      '<span class="tag tag-info">' + esc(job.is_demo ? "示例岗位" : job.source === "llm_suggested" ? "LLM 建议，需核实" : job.source === "local" ? "本地筛选结果" : job.source || "真实网页解析岗位") + "</span>" +
+      '<span class="tag ' + jobTrust(job).cls + '">' + esc(jobTrust(job).label) + "</span>" +
       "</div>" +
       '<div class="detail-score-row"><div class="detail-score">' + (needs ? "—" : score) + "</div>" +
       '<div><div class="detail-verdict">' + esc(needs ? "完善档案后查看匹配度" : (ev.verdict || "待评估")) + "</div>" +
