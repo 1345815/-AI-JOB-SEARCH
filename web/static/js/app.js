@@ -1685,20 +1685,32 @@
   }
 
   async function saveSettings() {
+    var saveButton = el("saveSettings"), status = el("llmTestStatus");
     var body = {
       enabled: el("llmEnabled").checked,
       base_url: el("llmBase").value.trim(),
       api_key: el("llmKey").value.trim(),
       model: el("llmModel").value.trim()
     };
+    if (body.enabled && (!body.base_url || !/^https?:\/\//i.test(body.base_url))) {
+      if (status) { status.textContent = "启用 AI 时必须填写以 http:// 或 https:// 开头的 API 地址。"; status.className = "resume-error"; }
+      toast("请先填写正确的 AI API 地址", "error");
+      return;
+    }
+    if (saveButton) { saveButton.disabled = true; saveButton.textContent = "保存中…"; }
     try {
       state.settings = await api("settings", { method: "PUT", body: body });
+      var persisted = await api("settings");
+      state.settings = persisted;
       state.onlineSearchAvailable = !!(state.settings.enabled && state.settings.has_key && state.settings.base_url);
       state.onlineSearchVerified = false;
       updateModePill();
       el("settingsModal").classList.remove("open");
       toast("设置已保存", "success");
-    } catch (e) { toast("保存失败：" + e.message, "error"); }
+    } catch (e) {
+      if (status) { status.textContent = "保存失败：" + e.message; status.className = "resume-error"; }
+      toast("保存失败：" + e.message, "error");
+    } finally { if (saveButton) { saveButton.disabled = false; saveButton.textContent = "保存并验证设置"; } }
   }
 
   function updateModePill() {

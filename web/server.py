@@ -186,6 +186,7 @@ def load_settings():
 
 
 def save_settings(settings):
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     _write_utf8(SETTINGS_FILE, json.dumps(settings, ensure_ascii=False, indent=2))
 
 
@@ -1798,6 +1799,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if head == "settings" and method == "PUT":
             body = self._json_body()
+            if not isinstance(body, dict):
+                self._send(400, {"ok": False, "error": "设置数据格式不正确"})
+                return
             settings = load_settings()
             if body.get("api_key") and body["api_key"] != "******":
                 settings["api_key"] = body["api_key"]
