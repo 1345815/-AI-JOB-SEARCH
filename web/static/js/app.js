@@ -9,6 +9,7 @@
     jobsTotal: 0,
     jobFacets: { cities: [], types: [] },
     applications: [],
+    helpRecords: [],
     selectedJobId: null,
     jobFilter: "",
     jobCityFilter: "",
@@ -914,6 +915,7 @@
 
   function renderPipeline() {
     var apps = state.applications;
+    var records = state.helpRecords || [];
     var columns = ["已收藏", "已投递", "面试中", "Offer", "已归档"];
     var reminders = applicationReminders(apps);
     var board =
@@ -955,6 +957,8 @@
       statCard("Offer", offers, offers ? "stat-warn" : "", "最终结果") +
       "</div>" +
       (reminders.length ? '<div class="panel mt-14"><div class="panel-head"><strong>需要处理</strong><span class="sub">截止、跟进和久未更新提醒</span></div><div class="list">' + reminders.map(function (r) { return '<div class="list-row"><div class="row-main"><div class="row-title">' + esc(r.title) + '</div><div class="row-sub">' + esc(r.company) + '</div></div><span class="tag ' + r.cls + '">' + esc(r.text) + '</span></div>'; }).join("") + '</div></div>' : '') +
+      '<div class="panel mt-14"><div class="panel-head"><strong>个人求职帮助记录</strong><span class="sub">记录准备、复盘和下一步，不再靠记忆找信息</span></div><div class="panel-body"><div class="form-grid"><label class="field"><span>记录标题</span><input id="helpRecordTitle" placeholder="例如：AI 模型评测岗一面复盘"></label><label class="field"><span>类型</span><select id="helpRecordType"><option>求职笔记</option><option>岗位分析</option><option>简历修改</option><option>面试复盘</option><option>沟通记录</option><option>求职计划</option></select></label><label class="field"><span>关联岗位（可选）</span><select id="helpRecordJob"><option value="">不关联岗位</option>' + state.jobs.map(function (j) { return '<option value="' + esc(j.id) + '">' + esc(j.title + " · " + j.company) + '</option>'; }).join("") + '</select></label><label class="field"><span>日期</span><input id="helpRecordDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '"></label></div><label class="field mt-8"><span>记录内容</span><textarea id="helpRecordContent" rows="4" placeholder="写下岗位重点、修改了什么、面试被问到什么、下一步要做什么…"></textarea></label><div class="form-actions"><button class="btn btn-primary" id="saveHelpRecord">保存这条记录</button></div></div>' +
+      (records.length ? '<div class="list" style="border-top:1px solid var(--border)">' + records.map(function (r) { var job = state.jobs.find(function (j) { return j.id === r.job_id; }); return '<div class="list-row"><div class="row-main"><div class="row-title">' + esc(r.title) + ' <span class="tag tag-info">' + esc(r.record_type) + '</span></div><div class="row-sub">' + esc(r.record_date || r.created_at || '') + (job ? ' · ' + esc(job.company + " · " + job.title) : '') + '</div><div class="text-mid" style="white-space:pre-wrap;margin-top:6px">' + esc(r.content || '') + '</div></div><button class="btn btn-sm btn-danger" data-delete-help-record="' + r.id + '">删除</button></div>'; }).join("") + '</div>' : '<div class="panel-body muted">还没有记录。建议把每次岗位分析、简历修改和面试复盘都记下来。</div>') +
       '<div class="mt-14">' + board + "</div>" +
       "</div>";
 
@@ -964,6 +968,25 @@
       });
     });
     document.querySelectorAll("[data-edit-app]").forEach(function (btn) { btn.addEventListener("click", function () { editApplication(btn.getAttribute("data-edit-app")); }); });
+    var saveRecord = el("saveHelpRecord");
+    if (saveRecord) saveRecord.addEventListener("click", saveHelpRecord);
+    document.querySelectorAll("[data-delete-help-record]").forEach(function (btn) { btn.addEventListener("click", function () { deleteHelpRecord(btn.getAttribute("data-delete-help-record")); }); });
+  }
+
+  async function saveHelpRecord() {
+    var title = el("helpRecordTitle").value.trim(), content = el("helpRecordContent").value.trim();
+    if (!title || !content) { toast("请至少填写记录标题和内容", "error"); return; }
+    var btn = el("saveHelpRecord"); btn.disabled = true; btn.textContent = "保存中…";
+    try {
+      await api("help-records", { method: "POST", body: { title: title, content: content, record_type: el("helpRecordType").value, job_id: el("helpRecordJob").value, record_date: el("helpRecordDate").value } });
+      await loadHelpRecords(); toast("求职记录已保存", "success"); renderPipeline();
+    } catch (e) { btn.disabled = false; btn.textContent = "保存这条记录"; toast("保存失败：" + e.message, "error"); }
+  }
+
+  async function deleteHelpRecord(id) {
+    if (!confirm("确定删除这条求职记录吗？")) return;
+    try { await api("help-records/" + encodeURIComponent(id), { method: "DELETE" }); await loadHelpRecords(); toast("记录已删除", "success"); renderPipeline(); }
+    catch (e) { toast("删除失败：" + e.message, "error"); }
   }
 
   function applicationReminders(apps) {
@@ -1762,6 +1785,10 @@
     el("pipelineBadge").textContent = state.applications.filter(function (a) { return ["已投递", "面试中"].indexOf(a.stage) >= 0; }).length || "0";
   }
 
+  async function loadHelpRecords() {
+    state.helpRecords = await api("help-records");
+  }
+
   var titles = {
     dashboard: "总览",
     jobs: "岗位搜索",
@@ -1853,7 +1880,7 @@
 
   async function bootApp() {
     try {
-      await Promise.all([loadJobs(), loadApplications()]);
+      await Promise.all([loadJobs(), loadApplications(), loadHelpRecords()]);
       if (!state.settings) state.settings = await api("settings");
       updateModePill();
       route();

@@ -327,6 +327,18 @@ def init_db():
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS help_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                job_id TEXT DEFAULT '',
+                record_type TEXT DEFAULT '求职笔记',
+                title TEXT NOT NULL,
+                content TEXT DEFAULT '',
+                record_date TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             """
         )
         conn.commit()
@@ -2010,6 +2022,50 @@ class Handler(BaseHTTPRequestHandler):
                 ).fetchall()
                 conn.close()
             self._send(200, [dict(r) for r in rows])
+            return
+
+        if head in ("help-records", "help_records") and method == "GET":
+            with _DB_LOCK:
+                conn = db()
+                rows = conn.execute("SELECT * FROM help_records WHERE user_id=? ORDER BY record_date DESC, updated_at DESC, id DESC", (user["id"],)).fetchall()
+                conn.close()
+            self._send(200, [dict(r) for r in rows])
+            return
+
+        if head in ("help-records", "help_records") and method == "POST":
+            body = self._json_body()
+            title = (body.get("title") or "").strip()
+            content = (body.get("content") or "").strip()
+            if not title:
+                self._send(400, {"ok": False, "error": "记录标题不能为空"})
+                return
+            if len(title) > 120 or len(content) > 10000:
+                self._send(400, {"ok": False, "error": "记录内容过长"})
+                return
+            job_id = (body.get("job_id") or "").strip()
+            if job_id and not get_job(job_id):
+                self._send(404, {"ok": False, "error": "关联岗位不存在"})
+                return
+            now = time.strftime("%Y-%m-%d %H:%M")
+            record_date = (body.get("record_date") or time.strftime("%Y-%m-%d")).strip()
+            with _DB_LOCK:
+                conn = db()
+                cur = conn.execute("INSERT INTO help_records (user_id, job_id, record_type, title, content, record_date, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)", (user["id"], job_id, (body.get("record_type") or "求职笔记").strip()[:40], title, content, record_date, now, now))
+                conn.commit()
+                row = conn.execute("SELECT * FROM help_records WHERE id=?", (cur.lastrowid,)).fetchone()
+                conn.close()
+            self._send(200, dict(row))
+            return
+
+        if head in ("help-records", "help_records") and len(parts) >= 2 and method == "DELETE":
+            with _DB_LOCK:
+                conn = db()
+                cur = conn.execute("DELETE FROM help_records WHERE id=? AND user_id=?", (parts[1], user["id"]))
+                conn.commit(); conn.close()
+            if not cur.rowcount:
+                self._send(404, {"ok": False, "error": "记录不存在"})
+                return
+            self._send(200, {"ok": True})
             return
 
         if head == "applications" and method == "POST":
