@@ -6,6 +6,7 @@ import urllib.request
 from pathlib import Path
 
 SETTINGS_FILE = Path(__file__).resolve().parent / "data" / "settings.json"
+LLM_TIMEOUT_SECONDS = int(os.environ.get("LLM_TIMEOUT_SECONDS", "35"))
 
 
 def load_settings():
@@ -65,7 +66,7 @@ def request_json(system, user_text):
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_SECONDS) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     content = data["choices"][0]["message"]["content"]
     try:

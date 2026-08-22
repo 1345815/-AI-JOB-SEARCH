@@ -542,11 +542,6 @@
         toast("线上模式尚未配置，请先到设置中开启 AI 服务", "error");
         return;
       }
-      if (!state.onlineSearchVerified) {
-        toast("正在验证 AI 服务连接，请稍候…", "info");
-        verifyAiConnection().then(function (ok) { if (ok) runSearch(keywords); });
-        return;
-      }
       btn.disabled = true;
       var originalText = btn.textContent;
       btn.textContent = "搜索中…";

@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from html.parser import HTMLParser
 
@@ -15,6 +16,7 @@ from llm_client import llm_available, request_json
 
 _CACHE_FILE = Path(__file__).with_name("data") / "job_search_cache.json"
 _CACHE_TTL_SECONDS = 6 * 3600
+_KEYWORD_CACHE_TTL_SECONDS = 15 * 60
 
 
 class _TextExtractor(HTMLParser):
@@ -169,11 +171,26 @@ def search_jobs(query: dict, settings: dict) -> list[dict]:
         text=" ".join([job.get("title",""),job.get("company",""),job.get("description","")," ".join(job.get("tags",[]))]).lower()
         if (not terms or all(t in text for t in terms)) and (not city or city in job.get("city","")): local.append({**job,"source":"local"})
     if not llm_available(): return local[:limit]
+    cache_key = "keyword:" + json.dumps({"keywords": query.get("keywords", ""), "city": query.get("city", ""), "limit": limit}, ensure_ascii=False, sort_keys=True)
+    try:
+        if _CACHE_FILE.exists():
+            store = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+            cached = store.get(cache_key)
+            if cached and time.time() - float(cached.get("fetched_at", 0)) < _KEYWORD_CACHE_TTL_SECONDS:
+                return (local + cached.get("results", []))[:limit]
+    except Exception:
+        pass
     try:
         raw=request_json("你是行业 HR 助手，只输出 JSON。", "返回 {jobs:[{title,company,city,posting_type,work_type,salary,description,requirements,url,tags}]}。只能给出合理候选，不能声称实时抓取。查询："+json.dumps(query,ensure_ascii=False))
         suggested=[]
         for job in raw.get("jobs",[])[:limit]:
             if job.get("title") and job.get("company"): suggested.append({**job,"id":"job-"+hashlib.sha256((job.get("url") or job["title"]+job["company"]).encode()).hexdigest()[:16],"source":"llm_suggested"})
+        try:
+            store = json.loads(_CACHE_FILE.read_text(encoding="utf-8")) if _CACHE_FILE.exists() else {}
+            store[cache_key] = {"fetched_at": time.time(), "results": suggested}
+            _CACHE_FILE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
         return (local+suggested)[:limit]
     except Exception: return local[:limit]
 
@@ -221,27 +238,32 @@ def search_company_jobs(company, city="", limit=8):
     # 阶段二：抓取候选页，提取同域岗位详情链接（总抓取 ≤10 页）
     skipped = []
     detail_urls = []
-    for cand in candidates[:6]:
-        if len(detail_urls) >= 10:
-            break
+
+    def fetch_candidate(cand):
         try:
             text = fetch_url_text(cand["url"])
         except Exception as exc:
-            skipped.append({"url": cand["url"], "reason": "抓取失败：" + str(exc)[:80]})
-            continue
+            return cand, None, "抓取失败：" + str(exc)[:80]
         if not text or len(text) < 100:
-            skipped.append({"url": cand["url"], "reason": "页面内容过少，可能是登录页或反爬限制"})
-            continue
+            return cand, None, "页面内容过少，可能是登录页或反爬限制"
         host = urllib.parse.urlparse(cand["url"]).netloc
         links = re.findall(
             r'https?://[^\s"\'<>]+(?:/job/|/position/|/zp/job/|/jobs?/\d)[^\s"\'<>]*',
             text,
         )
         detail = [link.rstrip(".,;，。") for link in links if urllib.parse.urlparse(link).netloc == host]
-        if detail:
-            detail_urls.extend(detail[:8])
-        else:
-            detail_urls.append(cand["url"])  # 无子链接则把该页当详情页
+        return cand, (detail[:8] if detail else [cand["url"]]), None
+
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(candidates[:6])))) as pool:
+        futures = [pool.submit(fetch_candidate, cand) for cand in candidates[:6]]
+        for future in as_completed(futures):
+            cand, found, error = future.result()
+            if error:
+                skipped.append({"url": cand["url"], "reason": error})
+            elif found:
+                detail_urls.extend(found)
+            if len(detail_urls) >= 10:
+                detail_urls = detail_urls[:10]
 
     unique, seen = [], set()
     for url in detail_urls[:10]:
@@ -250,17 +272,24 @@ def search_company_jobs(company, city="", limit=8):
             unique.append(url)
 
     # 阶段三：逐页抽取结构化岗位信息
-    jobs = []
-    for url in unique:
+    def extract_one(url):
         try:
             parsed = extract_job_from_url(url)
+            if not parsed.get("title"):
+                return url, None, "未解析到岗位标题"
+            return url, parsed, None
         except Exception as exc:
-            skipped.append({"url": url, "reason": "抽取失败：" + str(exc)[:80]})
-            continue
-        if not parsed.get("title"):
-            skipped.append({"url": url, "reason": "未解析到岗位标题"})
-            continue
-        jobs.append({
+            return url, None, "抽取失败：" + str(exc)[:80]
+
+    jobs = []
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(unique)))) as pool:
+        futures = [pool.submit(extract_one, url) for url in unique]
+        for future in as_completed(futures):
+            url, parsed, error = future.result()
+            if error:
+                skipped.append({"url": url, "reason": error})
+                continue
+            jobs.append({
             "title": str(parsed.get("title") or "未命名岗位")[:80],
             "company": str(parsed.get("company") or company)[:60],
             "city": city,
@@ -273,7 +302,7 @@ def search_company_jobs(company, city="", limit=8):
             "description": str(parsed.get("description") or "")[:2000],
             "requirements": [str(r) for r in (parsed.get("requirements") or [])][:20],
             "source": "web_search",
-        })
+            })
 
     # 写缓存（仅岗位信息，不含个人数据）
     try:

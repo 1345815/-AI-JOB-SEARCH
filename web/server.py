@@ -53,6 +53,7 @@ _DB_LOCK = threading.RLock()
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_FAILURES = {}
 _LLM_LAST_ERROR = ""
+LLM_TIMEOUT_SECONDS = int(os.environ.get("LLM_TIMEOUT_SECONDS", "35"))
 
 PROFILE_FIELDS = {
     "name", "email", "phone", "city", "school", "major", "graduation_date",
@@ -1297,7 +1298,7 @@ def llm_chat(messages, system=None):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_SECONDS) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
     except urllib.error.HTTPError as exc:
