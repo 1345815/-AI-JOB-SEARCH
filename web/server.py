@@ -8,9 +8,10 @@
 
 import argparse
 import base64
-import cgi
+import email
 import hashlib
 import hmac
+import io
 import json
 import mimetypes
 import os
@@ -21,6 +22,7 @@ import threading
 import time
 import urllib.request
 import urllib.parse
+from email import policy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -131,6 +133,36 @@ def _utf8(path):
 
 def _write_utf8(path, text):
     path.write_text(text, encoding="utf-8")
+
+
+class _UploadedFile:
+    """兼容 cgi.FieldStorage 文件字段的最小对象（filename + file.read()）。"""
+
+    def __init__(self, filename, data):
+        self.filename = filename
+        self.file = io.BytesIO(data)
+
+
+def _parse_multipart(content_type, raw):
+    """用标准库 email 解析 multipart/form-data，返回 {字段名: [part, ...]}。
+
+    替代已移除的 cgi.FieldStorage（Python 3.13 起不可用）。
+    解析失败时返回空 dict，由调用方按“缺少 file 字段”处理。
+    """
+    if "multipart/form-data" not in content_type.lower():
+        return {}
+    try:
+        header = "Content-Type: {}\r\nMIME-Version: 1.0\r\n\r\n".format(content_type)
+        msg = email.message_from_bytes(header.encode("utf-8") + raw, policy=policy.default)
+        parts = msg.iter_parts() if msg.is_multipart() else [msg]
+    except Exception:
+        return {}
+    fields = {}
+    for part in parts:
+        name = part.get_param("name", header="content-disposition")
+        if name:
+            fields.setdefault(name, []).append(part)
+    return fields
 
 
 def load_settings():
@@ -577,8 +609,22 @@ def add_job(job):
     now = time.strftime("%Y-%m-%d")
     with _DB_LOCK:
         conn = db()
+        # 保存前在服务端去重，不能只依赖前端的 saved_job_id。
+        existing = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not existing and job.get("url"):
+            normalized_url = normalize_job_url(job.get("url"))
+            rows = conn.execute("SELECT id, url FROM jobs WHERE url IS NOT NULL AND url != ''").fetchall()
+            existing = next((row for row in rows if normalize_job_url(row["url"]) == normalized_url), None)
+        if not existing and job.get("title") and job.get("company"):
+            existing = conn.execute(
+                "SELECT id FROM jobs WHERE lower(title)=lower(?) AND lower(company)=lower(?) AND coalesce(city,'')=coalesce(?, '') LIMIT 1",
+                (job.get("title"), job.get("company"), job.get("city", "")),
+            ).fetchone()
+        if existing:
+            conn.close()
+            return existing["id"]
         conn.execute(
-            """INSERT OR REPLACE INTO jobs
+            """INSERT OR IGNORE INTO jobs
                (id, title, company, city, posting_type, work_type, experience,
                 tags, salary, deadline, source, url, description, requirements,
                 created_at, is_demo)
@@ -614,7 +660,7 @@ def normalize_job_url(url):
     try:
         parsed = urllib.parse.urlsplit(raw)
         query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-        query = [(k, v) for k, v in query if not k.lower().startswith(("utm_", "spm", "from="))]
+        query = [(k, v) for k, v in query if not k.lower().startswith(("utm_", "spm", "from"))]
         return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), urllib.parse.urlencode(query), ""))
     except ValueError:
         return raw.rstrip("/").lower()
@@ -697,7 +743,11 @@ def quick_prefilter(job, profile=None):
 def profile_is_empty(profile):
     if not profile:
         return True
-    if profile.get("skills") or profile.get("name") or profile.get("projects") or profile.get("career_goals"):
+    skills = profile.get("skills") or {}
+    has_skills = any(bool(skills.get(key)) for key in ("strong", "moderate", "weak")) if isinstance(skills, dict) else bool(skills)
+    has_projects = any(bool(item) for item in (profile.get("projects") or []) if isinstance(item, dict))
+    has_goals = any(bool(item) for item in (profile.get("career_goals") or []))
+    if has_skills or profile.get("name") or has_projects or has_goals:
         return False
     return True
 
@@ -1338,40 +1388,29 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if length > 10 * 1024 * 1024 + 1024:
             return None, 413, "文件超过 10MB 上限"
-        form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
-            environ={
-                "REQUEST_METHOD": "POST",
-                "CONTENT_TYPE": content_type,
-            },
-        )
-        field = form["file"] if "file" in form else None
-        if isinstance(field, list):
-            field = field[0] if field else None
-        if field is None or not getattr(field, "filename", None):
+        fields = _parse_multipart(content_type, self.rfile.read(length))
+        parts = fields.get("file") or []
+        part = parts[0] if parts else None
+        filename = part.get_filename() if part is not None else None
+        if part is None or not filename:
             return None, 400, "缺少 file 字段"
-        return field, 200, ""
+        return _UploadedFile(filename, part.get_payload(decode=True) or b""), 200, ""
 
     def _multipart_files(self):
         content_type = self.headers.get("Content-Type", "")
         length = int(self.headers.get("Content-Length") or 0)
         if length > 50 * 1024 * 1024 + 4096:
             return None, 413, "文件总大小超过 50MB 上限"
-        form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
-            environ={
-                "REQUEST_METHOD": "POST",
-                "CONTENT_TYPE": content_type,
-            },
-        )
-        field = form["files"] if "files" in form else (form["file"] if "file" in form else None)
-        fields = field if isinstance(field, list) else ([field] if field is not None else [])
-        fields = [f for f in fields if getattr(f, "filename", None)]
-        if not fields:
+        fields = _parse_multipart(content_type, self.rfile.read(length))
+        parts = fields.get("files") or fields.get("file") or []
+        uploaded = [
+            _UploadedFile(p.get_filename() or "", p.get_payload(decode=True) or b"")
+            for p in parts
+            if p.get_filename()
+        ]
+        if not uploaded:
             return None, 400, "缺少 file 字段"
-        return fields, 200, ""
+        return uploaded, 200, ""
 
     def _api_resume_import(self, method, parts, user):
         current = normalize_profile(_safe_json(user.get("profile_json"), {}))
