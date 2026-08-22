@@ -170,7 +170,6 @@
     var cls = needs ? "zero" : scoreClass(score);
     var scoreText = needs ? "—" : score;
     var trust = jobTrust(job);
-    var demo = job.is_demo ? '<span class="tag">示例岗位</span>' : "";
     var source = '<span class="tag ' + trust.cls + '">' + esc(trust.label) + '</span>';
     var prefilter = ev.gates && ev.gates.prefilter;
     var prefilterTag = prefilter ? '<span class="tag ' + (prefilter.status === "recommend" ? "tag-accent" : prefilter.status === "reject" ? "tag-danger" : "tag-warn") + '">' + esc(prefilter.label) + '</span>' : "";
@@ -189,7 +188,7 @@
       '<div class="list-row job-item' + (state.selectedJobId === job.id && !searchResult ? " selected" : "") + '" data-job="' + esc(job.id) + '"' + (searchResult ? ' data-search-result="true"' : "") + ">" +
       '<span class="score-badge ' + cls + '">' + scoreText + "</span>" +
       '<div class="row-main">' +
-      '<div class="row-title-wrap"><span class="row-title">' + esc(job.title) + "</span>" + demo + source + prefilterTag + "</div>" +
+      '<div class="row-title-wrap"><span class="row-title">' + esc(job.title) + "</span>" + source + prefilterTag + "</div>" +
       '<div class="row-sub">' + esc(job.company) + " · " + esc(job.city) + " · " + esc(job.salary || "薪资未标注") + "</div>" +
       "</div>" +
       '<div class="row-meta">' + deadline + searchAction + "</div>" +
@@ -206,10 +205,10 @@
   }
 
   function jobTrust(job) {
-    if (job.is_demo) return { label: "示例，仅供熟悉", cls: "tag-warn" };
-    if (job.source === "llm_suggested") return { label: "AI 建议，需核实", cls: "tag-warn" };
-    if (job.url && /^https?:\/\//i.test(job.url)) return { label: "链接已验证", cls: "tag-accent" };
-    return { label: "来源待核实", cls: "tag-warn" };
+    if (job.is_demo) return { label: "示例，仅供熟悉", cls: "tag-warn", rank: 0 };
+    if (job.source === "llm_suggested") return { label: "AI 建议，需核实", cls: "tag-warn", rank: 1 };
+    if (job.url && /^https?:\/\//i.test(job.url)) return { label: "含真实链接", cls: "tag-accent", rank: 3 };
+    return { label: "来源待核实", cls: "tag-warn", rank: 2 };
   }
 
   function actionJobs() {
@@ -219,10 +218,12 @@
       var applied = state.applications.some(function (a) { return a.job_id === job.id && a.stage !== "已归档"; });
       return !job.is_demo && job.url && !applied && (!pf || pf.status !== "reject") && (!job.deadline || job.deadline >= today);
     }).sort(function (a, b) {
-      var as = (a.evaluation || {}).overall || 0, bs = (b.evaluation || {}).overall || 0;
+      var ta = jobTrust(a).rank, tb = jobTrust(b).rank;
+      if (ta !== tb) return tb - ta;
+      if (a.deadline && b.deadline) return a.deadline < b.deadline ? -1 : a.deadline > b.deadline ? 1 : 0;
       if (a.deadline && !b.deadline) return -1;
       if (b.deadline && !a.deadline) return 1;
-      return bs - as;
+      return ((b.evaluation || {}).overall || 0) - ((a.evaluation || {}).overall || 0);
     }).slice(0, 3);
   }
 
@@ -349,7 +350,7 @@
     var recentApps = apps.slice().slice(0, 6);
     var todayJobs = actionJobs();
     var todayActions = todayJobs.length
-      ? '<div class="panel mb-14"><div class="panel-head"><strong>今天先处理这 ' + todayJobs.length + ' 个岗位</strong><span class="sub">按链接可信度、匹配度和截止日期排序</span></div><div class="list">' + todayJobs.map(function (job) {
+      ? '<div class="panel mb-14"><div class="panel-head"><strong>今天先处理这 ' + todayJobs.length + ' 个岗位</strong><span class="sub">按链接可信度、截止日期和匹配度排序</span></div><div class="list">' + todayJobs.map(function (job) {
         var ev = job.evaluation || {}, trust = jobTrust(job), pf = ev.gates && ev.gates.prefilter;
         return '<div class="list-row"><span class="score-badge ' + scoreClass(ev.overall || 0) + '">' + (ev.overall || "—") + '</span><div class="row-main"><div class="row-title">' + esc(job.title) + '</div><div class="row-sub">' + esc(job.company) + ' · ' + esc(job.city || "地点待确认") + ' · ' + '<span class="tag ' + trust.cls + '">' + esc(trust.label) + '</span>' + (job.deadline ? ' · 截止 ' + esc(job.deadline) : '') + '</div><div class="muted text-sm">' + esc((pf && pf.reasons && pf.reasons[0]) || (ev.summary || "打开岗位详情，确认要求后开始申请")) + '</div></div><button class="btn btn-sm btn-primary" data-open-job="' + esc(job.id) + '">查看并处理</button></div>';
       }).join('') + '</div></div>'
