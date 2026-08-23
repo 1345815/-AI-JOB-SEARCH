@@ -26,6 +26,15 @@ _CACHE_TTL_SECONDS = 6 * 3600
 _KEYWORD_CACHE_TTL_SECONDS = 15 * 60
 _FREEHIRE_API_URL = "https://freehire.me/api/v1/agent/jobs/search"
 
+# 内置平台适配器：用户无需配置，按招聘平台识别，不按公司重复开发。
+BUILTIN_ATS_ADAPTERS = (
+    {"id": "mokahr", "name": "Mokahr 校招", "status": "ready"},
+    {"id": "greenhouse", "name": "Greenhouse", "status": "ready"},
+    {"id": "lever", "name": "Lever", "status": "ready"},
+    {"id": "ashby", "name": "Ashby", "status": "ready"},
+    {"id": "web", "name": "普通招聘网页", "status": "fallback"},
+)
+
 
 def _mokahr_job_from_url(url):
     """读取 Mokahr 校招详情接口。Mokahr 页面正文由前端接口返回并 AES-128-CBC 封装。"""
@@ -81,18 +90,22 @@ def _public_ats_job_from_url(url):
         platform, board, job_id = "greenhouse", parts[0], parts[2]
     elif host == "jobs.lever.co" and len(parts) >= 2:
         platform, board, job_id = "lever", parts[0], parts[1]
+    elif host == "jobs.ashbyhq.com" and len(parts) >= 2:
+        platform, board, job_id = "ashby", parts[0], parts[1]
     if not platform:
         return None
     if platform == "greenhouse":
         endpoint = f"https://boards-api.greenhouse.io/v1/boards/{urllib.parse.quote(board)}/jobs/{urllib.parse.quote(job_id)}"
-    else:
+    elif platform == "lever":
         endpoint = f"https://api.lever.co/v0/postings/{urllib.parse.quote(board)}/{urllib.parse.quote(job_id)}"
+    else:
+        endpoint = f"https://api.ashbyhq.com/posting-api/job-board/{urllib.parse.quote(board)}/{urllib.parse.quote(job_id)}"
     req = urllib.request.Request(endpoint, headers={"Accept": "application/json", "User-Agent": "CareerPilot/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp: data = json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
-    description = data.get("content") or data.get("description") or data.get("job_description") or ""
+    description = data.get("content") or data.get("description") or data.get("job_description") or data.get("descriptionHtml") or ""
     parser = _TextExtractor(); parser.feed(str(description))
     text = parser.text()
     local = _local_extract(text)

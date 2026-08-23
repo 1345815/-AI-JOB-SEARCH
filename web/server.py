@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from profile_merger import apply_paths, build_merge_plan
-from job_extractor import extract_job_from_url, search_jobs, search_company_jobs, decorate_search_results
+from job_extractor import extract_job_from_url, search_jobs, search_company_jobs, decorate_search_results, BUILTIN_ATS_ADAPTERS
 from form_extractor import extract_form
 from form_filler import build_fill_plan
 from resume_extractor import extract_profile_from_resume
@@ -1921,6 +1921,10 @@ class Handler(BaseHTTPRequestHandler):
             if limit is not None:
                 results = results[offset:offset + limit]
             self._send(200, {"jobs": results, "total": total, "facets": facets} if limit is not None else results)
+            return
+
+        if head == "jobs" and len(parts) == 2 and parts[1] == "adapters" and method == "GET":
+            self._send(200, {"ok": True, "data": list(BUILTIN_ATS_ADAPTERS)})
             return
 
         if head=="jobs" and len(parts)>=3 and parts[1]=="search" and parts[2]=="company" and method=="POST":
