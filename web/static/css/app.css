@@ -752,6 +752,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--te
 .builtin-adapters { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin: -2px 0 10px; color:var(--text-3); font-size:11.5px; }
 .builtin-adapters > span:first-child { color:var(--text-2); font-weight:650; margin-right:2px; }
 .builtin-adapters small { color:var(--text-3); margin-left:2px; }
+.onboarding-modal { width: 560px; }
+.onboarding-modal .modal-body { gap: 12px; }
 
 /* Responsive */
 @media (max-width: 1080px) {

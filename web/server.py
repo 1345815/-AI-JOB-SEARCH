@@ -62,7 +62,7 @@ PROFILE_FIELDS = {
     "portfolio", "github", "linkedin", "status", "location_preference",
     "career_goals", "notes", "highest_degree", "english_level", "target_role",
     "target_sectors", "target_city", "available_date",
-    "filter_keywords", "filter_exclude_keywords", "accept_internship", "min_match_score",
+    "filter_keywords", "filter_exclude_keywords", "accept_internship", "min_match_score", "onboarding_completed",
 }
 PROFILE_TEXT_LIMITS = {
     "name": 80, "email": 160, "phone": 40, "city": 80, "school": 160,
@@ -1840,6 +1840,22 @@ class Handler(BaseHTTPRequestHandler):
             user = get_user_by_token(self._session_token())
             self._send(200, _safe_json(user.get("profile_json"), {}))
             return
+
+        if head == "daily-recommendations" and method == "GET":
+            profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
+            keywords = " ".join([profile.get("target_role", "")] + profile.get("target_sectors", []) + profile.get("target_roles", [])) .strip()
+            if not keywords:
+                self._send(200, {"ok": True, "data": [], "message": "先完成求职偏好问答"}); return
+            results = search_jobs({"keywords": keywords, "city": profile.get("target_city", ""), "limit": 20}, load_settings())
+            scored = []
+            for item in results:
+                if item.get("source") == "llm_suggested": continue
+                try:
+                    job = get_job(add_job(item)); ev = score_job(job, profile); save_evaluation(user["id"], ev)
+                    scored.append({**job, "evaluation": ev})
+                except Exception: continue
+            scored.sort(key=lambda x: (x.get("evaluation") or {}).get("overall", 0), reverse=True)
+            self._send(200, {"ok": True, "data": scored[:2], "generated_at": time.strftime("%Y-%m-%d")}); return
 
         if head == "profile" and len(parts) >= 2 and parts[1] == "resume-import":
             return self._api_resume_import(method, parts[2:], user)

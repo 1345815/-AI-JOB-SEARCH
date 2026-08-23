@@ -243,6 +243,20 @@
       </div>
     </div>
 
+    <div class="modal-overlay" id="onboardingModal">
+      <div class="modal onboarding-modal">
+        <div class="modal-head"><strong>先告诉我你的求职偏好</strong><button class="icon-btn" id="onboardingSkip" aria-label="稍后填写">×</button></div>
+        <div class="modal-body">
+          <p class="muted">回答 4 个问题后，我会每天从真实岗位来源中为你挑选 2 个最匹配的岗位。</p>
+          <label class="field"><span>1. 想从事的方向 *</span><input id="onboardRole" placeholder="例如：AI 产品运营、游戏策划、模型评测"></label>
+          <label class="field"><span>2. 你的专业 *</span><input id="onboardMajor" placeholder="例如：计算机科学与技术、新闻传播学"></label>
+          <label class="field"><span>3. 想去发展的地方（最多 3 个） *</span><input id="onboardCities" placeholder="例如：上海、北京、杭州"></label>
+          <label class="field"><span>4. 期望工资 *</span><input id="onboardSalary" placeholder="例如：10K-15K / 月薪不低于 12K"></label>
+          <div class="modal-actions"><button class="btn btn-ghost" id="onboardingLater">稍后填写</button><button class="btn btn-primary" id="onboardingSave">保存并开始推荐</button></div>
+        </div>
+      </div>
+    </div>
+
     <div class="toast-wrap" id="toasts"></div>
   </div>
 

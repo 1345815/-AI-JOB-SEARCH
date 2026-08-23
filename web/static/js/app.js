@@ -263,6 +263,30 @@
     el("userRole").textContent = roleLabel;
     el("menuUpgrade").classList.toggle("hide", user.role !== "guest");
     updateProfileBanner();
+    if (!state.profile.onboarding_completed && !sessionStorage.getItem("careerpilot_onboarding_later")) setTimeout(openOnboarding, 350);
+  }
+
+  function openOnboarding() {
+    var modal = el("onboardingModal"); if (!modal) return;
+    el("onboardRole").value = state.profile.target_role || "";
+    el("onboardMajor").value = state.profile.major || "";
+    el("onboardCities").value = (state.profile.target_cities || []).join("、") || state.profile.target_city || "";
+    el("onboardSalary").value = state.profile.salary_expectation || "";
+    modal.classList.add("open");
+  }
+
+  async function saveOnboarding() {
+    var role = el("onboardRole").value.trim(), major = el("onboardMajor").value.trim(), cities = splitProfileItems(el("onboardCities").value).slice(0, 3), salary = el("onboardSalary").value.trim();
+    if (!role || !major || !cities.length || !salary) { toast("请把 4 个问题都填写完整", "warn"); return; }
+    var btn = el("onboardingSave"); btn.disabled = true; btn.textContent = "保存中…";
+    try {
+      state.profile = await api("profile", { method: "PUT", body: { target_role: role, major: major, target_cities: cities, target_city: cities[0], salary_expectation: salary, onboarding_completed: true, career_goals: [role] } });
+      state.user.profile = state.profile; el("onboardingModal").classList.remove("open"); await loadJobs(); renderDashboard(); toast("偏好已保存，正在生成每日推荐", "success"); loadDailyRecommendations();
+    } catch (e) { toast("保存偏好失败：" + e.message, "error"); } finally { btn.disabled = false; btn.textContent = "保存并开始推荐"; }
+  }
+
+  function loadDailyRecommendations() {
+    api("daily-recommendations").then(function (res) { state.dailyRecommendations = res.data || []; if (state.view === "dashboard") renderDashboard(); }).catch(function () {});
   }
 
   function updateProfileBanner() {
@@ -352,7 +376,7 @@
       ? jobs.slice().sort(function (a, b) { return (b.created_at || "").localeCompare(a.created_at || ""); }).slice(0, 6)
       : jobs.slice().sort(function (a, b) { return (b.evaluation || {}).overall - (a.evaluation || {}).overall; }).slice(0, 6);
     var recentApps = apps.slice().slice(0, 6);
-    var todayJobs = actionJobs();
+    var todayJobs = state.dailyRecommendations && state.dailyRecommendations.length ? state.dailyRecommendations : actionJobs();
     var todayActions = todayJobs.length
       ? '<div class="panel mb-14"><div class="panel-head"><strong>今天先处理这 ' + todayJobs.length + ' 个岗位</strong><span class="sub">按链接可信度、截止日期和匹配度排序</span></div><div class="list">' + todayJobs.map(function (job) {
         var ev = job.evaluation || {}, trust = jobTrust(job), pf = ev.gates && ev.gates.prefilter;
@@ -1901,6 +1925,9 @@
     el("upgradeBtn").addEventListener("click", function () {
       upgrade(el("upgUsername").value, el("upgEmail").value, el("upgPassword").value).catch(function (err) { toast(err.message, "error"); });
     });
+    el("onboardingSave").addEventListener("click", saveOnboarding);
+    el("onboardingLater").addEventListener("click", function () { sessionStorage.setItem("careerpilot_onboarding_later", "1"); el("onboardingModal").classList.remove("open"); });
+    el("onboardingSkip").addEventListener("click", function () { sessionStorage.setItem("careerpilot_onboarding_later", "1"); el("onboardingModal").classList.remove("open"); });
     document.addEventListener("click", function (e) {
       if (!e.target.closest("#userMenu")) el("userDropdown").classList.add("hide");
     });
@@ -1919,6 +1946,7 @@
       if (!state.settings) state.settings = await api("settings");
       updateModePill();
       route();
+      if (state.profile && state.profile.onboarding_completed) loadDailyRecommendations();
     } catch (e) {
       el("content").innerHTML = '<div class="content-inner"><div class="panel"><div class="panel-body">' + emptyBlock("加载失败", e.message) + "</div></div></div>";
     }
