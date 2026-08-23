@@ -19,6 +19,7 @@
     jobSort: "score",
     searchResults: [],
     searchSkipped: [],
+    searchSources: [],
     searchHistory: [],
     searchMode: null,
     advancedExpanded: false,
@@ -173,6 +174,7 @@
     var scoreText = needs ? "—" : score;
     var trust = jobTrust(job);
     var source = '<span class="tag ' + trust.cls + '">' + esc(trust.label) + '</span>' + (job.source === "freehire" ? '<span class="tag tag-info">FreeHire ATS</span>' : '');
+    if (job.quality_score) source += '<span class="tag ' + (job.quality_score >= 80 ? 'tag-accent' : job.quality_score >= 55 ? 'tag-warn' : 'tag-danger') + '">质量 ' + esc(job.quality_score) + ' · ' + esc(job.quality_label || '建议核实') + '</span>';
     var prefilter = ev.gates && ev.gates.prefilter;
     var prefilterTag = prefilter ? '<span class="tag ' + (prefilter.status === "recommend" ? "tag-accent" : prefilter.status === "reject" ? "tag-danger" : "tag-warn") + '">' + esc(prefilter.label) + '</span>' : "";
     var deadline = job.deadline
@@ -444,8 +446,9 @@
       var aiCount = state.searchResults.filter(function (job) { return job.source === "llm_suggested"; }).length;
       searchHtml =
         '<div class="panel mb-14" id="searchResultsPanel"><div class="panel-head">' +
-        '<strong>搜索结果</strong><span class="sub">' + state.searchResults.length + " 个 · 关键词：" + esc(state.searchKeyword || "") + ' · 真实来源 ' + verifiedCount + ' · AI 建议 ' + aiCount + '</span></div>' +
+      '<strong>搜索结果</strong><span class="sub">' + state.searchResults.length + " 个 · 关键词：" + esc(state.searchKeyword || "") + ' · 真实来源 ' + verifiedCount + ' · AI 建议 ' + aiCount + '</span></div>' +
         '<div class="panel-body" style="padding:10px 12px">' +
+        (state.searchSources && state.searchSources.length ? '<div class="merge-source" style="margin-bottom:8px">来源健康：' + state.searchSources.map(function (source) { return '<span class="tag ' + (source.verified ? 'tag-accent' : 'tag-warn') + '" style="margin-right:6px">' + esc(source.label) + ' ' + source.count + ' 条</span>'; }).join('') + '</div>' : '') +
         '<div class="flex" style="gap:8px;margin-bottom:10px">' +
         '<button class="btn btn-sm btn-primary" id="addSearchAll"' + (pendingSearchCount ? "" : " disabled") + '>全部加入岗位库' + (pendingSearchCount ? "（" + pendingSearchCount + "）" : "") + "</button>" +
         '<button class="btn btn-sm" id="clearSearchResults">清除搜索结果</button>' +
@@ -558,6 +561,7 @@
         });
         state.searchResults = results;
         state.searchSkipped = data.skipped || [];
+        state.searchSources = data.sources || [];
         state.searchMode = data.mode || (data.data && data.data.length ? "llm" : "local");
         state.searchKeyword = keywords;
         rememberSearch(keywords);
@@ -640,6 +644,7 @@
   function clearSearchResults() {
     state.searchResults = [];
     state.searchSkipped = [];
+    state.searchSources = [];
     state.searchMode = null;
     state.searchKeyword = "";
     renderJobs();

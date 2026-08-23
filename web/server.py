@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from profile_merger import apply_paths, build_merge_plan
-from job_extractor import extract_job_from_url, search_jobs, search_company_jobs
+from job_extractor import extract_job_from_url, search_jobs, search_company_jobs, decorate_search_results
 from form_extractor import extract_form
 from form_filler import build_fill_plan
 from resume_extractor import extract_profile_from_resume
@@ -625,6 +625,16 @@ def filter_jobs(jobs, query):
         except ValueError:
             pass
     return jobs
+
+
+def search_source_health(results):
+    """返回搜索来源概况，让前端明确哪些是抓到的真实岗位。"""
+    counts = {}
+    for item in results or []:
+        source = item.get("source") or "unknown"
+        counts[source] = counts.get(source, 0) + 1
+    labels = {"freehire": "FreeHire ATS", "web_search": "网页解析", "URL解析": "岗位链接", "local": "本地岗位", "llm_suggested": "AI 建议"}
+    return [{"source": key, "label": labels.get(key, key), "count": value, "verified": key not in ("llm_suggested", "local")} for key, value in counts.items()]
 
 
 def mark_saved_search_results(results):
@@ -1929,7 +1939,8 @@ class Handler(BaseHTTPRequestHandler):
                     job=get_job(add_job(item)); ev=score_job(job,profile); save_evaluation(user["id"],ev)
                     output.append({**job,"evaluation":ev})
                 except Exception: continue
-            self._send(200,{"ok":True,"data":output,"skipped":result.get("skipped",[]),"cached":bool(result.get("cached")),"hint":"已从真实招聘页面抓取岗位，投递前仍建议人工核实链接。"}); return
+            output = decorate_search_results(output)
+            self._send(200,{"ok":True,"data":output,"skipped":result.get("skipped",[]),"cached":bool(result.get("cached")),"sources":search_source_health(output),"hint":"已从真实招聘页面抓取岗位；结果按信息完整度标记，投递前仍建议人工核实链接。"}); return
 
         if head=="jobs" and len(parts)==2 and parts[1]=="search" and method=="GET":
             s=load_settings(); self._send(200,{"ok":True,"data":{"enabled":bool(s.get("enabled") and s.get("api_key") and s.get("base_url")),"provider":s.get("provider","custom"),"model":s.get("model",""),"has_key":bool(s.get("api_key"))}}); return
@@ -1940,7 +1951,8 @@ class Handler(BaseHTTPRequestHandler):
             for item in results:
                 if item.get("source")=="local": continue
                 job=get_job(add_job(item)); ev=score_job(job,profile); save_evaluation(user["id"],ev); output.append({**job,"evaluation":ev})
-            self._send(200,{"ok":True,"data":mark_saved_search_results(output),"local_results":mark_saved_search_results([item for item in results if item.get("source")=="local"]),"mode":"llm","hint":"以下为 LLM 建议，投递前请人工核实链接。"}); return
+            decorated = decorate_search_results(output)
+            self._send(200,{"ok":True,"data":mark_saved_search_results(decorated),"local_results":mark_saved_search_results([item for item in results if item.get("source")=="local"]),"mode":"llm","sources":search_source_health(results),"hint":"结果已按来源、信息完整度和发布时间标记；AI 建议岗位仍需打开原帖核实。"}); return
 
         if head == "jobs" and len(parts) >= 2 and parts[1] == "parse" and method == "POST":
             body = self._json_body()

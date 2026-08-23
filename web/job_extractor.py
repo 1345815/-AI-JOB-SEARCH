@@ -174,14 +174,14 @@ def search_jobs(query: dict, settings: dict) -> list[dict]:
         text=" ".join([job.get("title",""),job.get("company",""),job.get("description","")," ".join(job.get("tags",[]))]).lower()
         if (not terms or all(t in text for t in terms)) and (not city or city in job.get("city","")): local.append({**job,"source":"local"})
     real_results = search_freehire_jobs(query, limit)
-    if not llm_available(): return (real_results + local)[:limit]
+    if not llm_available(): return decorate_search_results((real_results + local)[:limit])
     cache_key = "keyword:" + json.dumps({"keywords": query.get("keywords", ""), "city": query.get("city", ""), "limit": limit}, ensure_ascii=False, sort_keys=True)
     try:
         if _CACHE_FILE.exists():
             store = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
             cached = store.get(cache_key)
             if cached and time.time() - float(cached.get("fetched_at", 0)) < _KEYWORD_CACHE_TTL_SECONDS:
-                return (real_results + local + cached.get("results", []))[:limit]
+                return decorate_search_results((real_results + local + cached.get("results", []))[:limit])
     except Exception:
         pass
     try:
@@ -195,8 +195,51 @@ def search_jobs(query: dict, settings: dict) -> list[dict]:
             _CACHE_FILE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
-        return (real_results + local + suggested)[:limit]
-    except Exception: return (real_results + local)[:limit]
+        return decorate_search_results((real_results + local + suggested)[:limit])
+    except Exception: return decorate_search_results((real_results + local)[:limit])
+
+
+def decorate_search_results(results: list[dict]) -> list[dict]:
+    """统一搜索结果质量标记，帮助用户快速判断“能不能信、是否值得先看”。"""
+    unique, seen = [], set()
+    for job in results or []:
+        if not isinstance(job, dict):
+            continue
+        url = str(job.get("url") or "").strip().lower().rstrip("/")
+        key = url or (str(job.get("title") or "").strip().lower(), str(job.get("company") or "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        source = str(job.get("source") or "")
+        source_score = {"freehire": 92, "web_search": 84, "URL解析": 88, "local": 58, "llm_suggested": 30}.get(source, 50)
+        completeness = 0
+        for field in ("title", "company", "url", "description"):
+            if job.get(field):
+                completeness += 1
+        if job.get("requirements") or job.get("tags"):
+            completeness += 1
+        completeness_score = round(completeness / 5 * 100)
+        freshness_score, freshness_label = 55, "发布时间待确认"
+        posted = str(job.get("posted_at") or "")[:10]
+        if posted:
+            try:
+                age = max(0, (time.time() - time.mktime(time.strptime(posted, "%Y-%m-%d"))) / 86400)
+                freshness_score = 100 if age <= 7 else 82 if age <= 30 else 60 if age <= 90 else 35
+                freshness_label = "近 7 天" if age <= 7 else "近 30 天" if age <= 30 else "较早发布"
+            except (TypeError, ValueError, OverflowError):
+                pass
+        quality = round(source_score * 0.55 + completeness_score * 0.30 + freshness_score * 0.15)
+        reasons = []
+        if source in ("freehire", "web_search", "URL解析"):
+            reasons.append("真实来源")
+        elif source == "llm_suggested":
+            reasons.append("AI 生成候选，需打开原帖核实")
+        if completeness_score < 70:
+            reasons.append("岗位信息不完整")
+        if freshness_label != "发布时间待确认":
+            reasons.append(freshness_label)
+        unique.append({**job, "quality_score": quality, "quality_label": "优先查看" if quality >= 80 else "建议核实" if quality >= 55 else "谨慎参考", "freshness_label": freshness_label, "quality_reasons": reasons})
+    return unique
 
 
 def search_freehire_jobs(query: dict, limit=20) -> list[dict]:
@@ -214,7 +257,7 @@ def search_freehire_jobs(query: dict, limit=20) -> list[dict]:
             store = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
             cached = store.get(cache_key)
             if cached and time.time() - float(cached.get("fetched_at", 0)) < _KEYWORD_CACHE_TTL_SECONDS:
-                return cached.get("results", [])[:limit]
+                return decorate_search_results(cached.get("results", [])[:limit])
     except Exception:
         pass
     url = os.environ.get("FREEHIRE_API_URL", _FREEHIRE_API_URL) + "?" + urllib.parse.urlencode(params)
@@ -259,7 +302,7 @@ def search_freehire_jobs(query: dict, limit=20) -> list[dict]:
             _CACHE_FILE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
-        return results
+        return decorate_search_results(results)
     except Exception:
         return []
 
