@@ -8,6 +8,8 @@ import urllib.parse
 import urllib.request
 import hashlib
 import json
+import html
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from html.parser import HTMLParser
@@ -17,6 +19,7 @@ from llm_client import llm_available, request_json
 _CACHE_FILE = Path(__file__).with_name("data") / "job_search_cache.json"
 _CACHE_TTL_SECONDS = 6 * 3600
 _KEYWORD_CACHE_TTL_SECONDS = 15 * 60
+_FREEHIRE_API_URL = "https://freehire.me/api/v1/agent/jobs/search"
 
 
 class _TextExtractor(HTMLParser):
@@ -170,14 +173,15 @@ def search_jobs(query: dict, settings: dict) -> list[dict]:
     for job in json.loads((Path(__file__).with_name("data") / "jobs_seed.json").read_text(encoding="utf-8")):
         text=" ".join([job.get("title",""),job.get("company",""),job.get("description","")," ".join(job.get("tags",[]))]).lower()
         if (not terms or all(t in text for t in terms)) and (not city or city in job.get("city","")): local.append({**job,"source":"local"})
-    if not llm_available(): return local[:limit]
+    real_results = search_freehire_jobs(query, limit)
+    if not llm_available(): return (local + real_results)[:limit]
     cache_key = "keyword:" + json.dumps({"keywords": query.get("keywords", ""), "city": query.get("city", ""), "limit": limit}, ensure_ascii=False, sort_keys=True)
     try:
         if _CACHE_FILE.exists():
             store = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
             cached = store.get(cache_key)
             if cached and time.time() - float(cached.get("fetched_at", 0)) < _KEYWORD_CACHE_TTL_SECONDS:
-                return (local + cached.get("results", []))[:limit]
+                return (local + real_results + cached.get("results", []))[:limit]
     except Exception:
         pass
     try:
@@ -191,8 +195,73 @@ def search_jobs(query: dict, settings: dict) -> list[dict]:
             _CACHE_FILE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
-        return (local+suggested)[:limit]
+        return (local + real_results + suggested)[:limit]
     except Exception: return local[:limit]
+
+
+def search_freehire_jobs(query: dict, limit=20) -> list[dict]:
+    """从公开 ATS 聚合接口获取真实岗位；失败时返回空列表，不阻塞主搜索。"""
+    keywords = (query.get("keywords") or "").strip()
+    if not keywords:
+        return []
+    params = {"q": keywords, "limit": str(min(max(int(limit), 1), 25))}
+    city = (query.get("city") or "").strip()
+    if city:
+        params["city"] = city
+    cache_key = "freehire:" + json.dumps(params, ensure_ascii=False, sort_keys=True)
+    try:
+        if _CACHE_FILE.exists():
+            store = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+            cached = store.get(cache_key)
+            if cached and time.time() - float(cached.get("fetched_at", 0)) < _KEYWORD_CACHE_TTL_SECONDS:
+                return cached.get("results", [])[:limit]
+    except Exception:
+        pass
+    url = os.environ.get("FREEHIRE_API_URL", _FREEHIRE_API_URL) + "?" + urllib.parse.urlencode(params)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "CareerPilot/1.0", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        rows = payload.get("data") or payload.get("results") or []
+        results = []
+        for row in rows[:limit]:
+            if not isinstance(row, dict) or not row.get("title") or not row.get("url"):
+                continue
+            description = html.unescape(str(row.get("description") or ""))
+            parser = _TextExtractor()
+            try:
+                parser.feed(description)
+                description = parser.text()
+            except Exception:
+                description = re.sub(r"<[^>]+>", " ", description)
+            location = str(row.get("location") or "")
+            results.append({
+                "id": "freehire-" + str(row.get("public_slug") or hashlib.sha256(str(row.get("url")).encode()).hexdigest()[:16]),
+                "title": str(row.get("title"))[:100],
+                "company": str(row.get("company") or "未知公司")[:80],
+                "city": location[:100],
+                "posting_type": "社会招聘",
+                "work_type": "远程" if "remote" in location.lower() else "全职",
+                "experience": str((row.get("enrichment") or {}).get("experience_years_min") or ""),
+                "salary": "",
+                "deadline": "",
+                "tags": [str(skill) for skill in (row.get("skills") or [])[:12]],
+                "url": str(row.get("url")),
+                "description": description[:6000],
+                "requirements": [],
+                "source": "freehire",
+                "source_name": "FreeHire ATS 聚合",
+                "posted_at": row.get("posted_at") or row.get("created_at") or "",
+            })
+        try:
+            store = json.loads(_CACHE_FILE.read_text(encoding="utf-8")) if _CACHE_FILE.exists() else {}
+            store[cache_key] = {"fetched_at": time.time(), "results": results}
+            _CACHE_FILE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+        return results
+    except Exception:
+        return []
 
 
 def search_company_jobs(company, city="", limit=8):

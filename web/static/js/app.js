@@ -172,7 +172,7 @@
     var cls = needs ? "zero" : scoreClass(score);
     var scoreText = needs ? "—" : score;
     var trust = jobTrust(job);
-    var source = '<span class="tag ' + trust.cls + '">' + esc(trust.label) + '</span>';
+    var source = '<span class="tag ' + trust.cls + '">' + esc(trust.label) + '</span>' + (job.source === "freehire" ? '<span class="tag tag-info">FreeHire ATS</span>' : '');
     var prefilter = ev.gates && ev.gates.prefilter;
     var prefilterTag = prefilter ? '<span class="tag ' + (prefilter.status === "recommend" ? "tag-accent" : prefilter.status === "reject" ? "tag-danger" : "tag-warn") + '">' + esc(prefilter.label) + '</span>' : "";
     var deadline = job.deadline
