@@ -26,6 +26,7 @@ web/data/careerpilot.db
 web/data/careerpilot.db-shm
 web/data/careerpilot.db-wal
 web/data/settings.json
+web/data/job_search_cache.json
 web/data/profile.private.json
 web/data/backups/
 web/data/resumes/
