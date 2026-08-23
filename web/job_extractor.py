@@ -174,14 +174,14 @@ def search_jobs(query: dict, settings: dict) -> list[dict]:
         text=" ".join([job.get("title",""),job.get("company",""),job.get("description","")," ".join(job.get("tags",[]))]).lower()
         if (not terms or all(t in text for t in terms)) and (not city or city in job.get("city","")): local.append({**job,"source":"local"})
     real_results = search_freehire_jobs(query, limit)
-    if not llm_available(): return (local + real_results)[:limit]
+    if not llm_available(): return (real_results + local)[:limit]
     cache_key = "keyword:" + json.dumps({"keywords": query.get("keywords", ""), "city": query.get("city", ""), "limit": limit}, ensure_ascii=False, sort_keys=True)
     try:
         if _CACHE_FILE.exists():
             store = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
             cached = store.get(cache_key)
             if cached and time.time() - float(cached.get("fetched_at", 0)) < _KEYWORD_CACHE_TTL_SECONDS:
-                return (local + real_results + cached.get("results", []))[:limit]
+                return (real_results + local + cached.get("results", []))[:limit]
     except Exception:
         pass
     try:
@@ -195,7 +195,7 @@ def search_jobs(query: dict, settings: dict) -> list[dict]:
             _CACHE_FILE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
-        return (local + real_results + suggested)[:limit]
+        return (real_results + local + suggested)[:limit]
     except Exception: return local[:limit]
 
 
