@@ -63,6 +63,8 @@ def _mokahr_job_from_url(url):
         description = next((str(value) for value in job.values() if isinstance(value, str) and ("岗位职责" in value or "任职要求" in value or len(value) > 500)), "")
     parser = _TextExtractor(); parser.feed(description)
     local = _local_extract(parser.text())
+    if not local.get("description"):
+        local["description"] = parser.text()[:3000]
     local.update({
         "title": job.get("name") or job.get("title") or local.get("title"),
         "company": job.get("companyName") or job.get("organizationName") or job.get("orgName") or local.get("company"),
