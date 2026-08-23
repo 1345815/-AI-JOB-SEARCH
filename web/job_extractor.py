@@ -73,6 +73,33 @@ def _mokahr_job_from_url(url):
     return _normalize_extracted_job(local, parser.text(), url)
 
 
+def _public_ats_job_from_url(url):
+    """统一处理公开 ATS 岗位接口；按平台识别，不按公司写死。"""
+    parsed = urllib.parse.urlparse(url); host = (parsed.hostname or "").lower(); parts = [p for p in parsed.path.split("/") if p]
+    platform, board, job_id = None, None, None
+    if host in ("boards.greenhouse.io", "job-boards.greenhouse.io") and len(parts) >= 3 and parts[0] != "embed":
+        platform, board, job_id = "greenhouse", parts[0], parts[2]
+    elif host == "jobs.lever.co" and len(parts) >= 2:
+        platform, board, job_id = "lever", parts[0], parts[1]
+    if not platform:
+        return None
+    if platform == "greenhouse":
+        endpoint = f"https://boards-api.greenhouse.io/v1/boards/{urllib.parse.quote(board)}/jobs/{urllib.parse.quote(job_id)}"
+    else:
+        endpoint = f"https://api.lever.co/v0/postings/{urllib.parse.quote(board)}/{urllib.parse.quote(job_id)}"
+    req = urllib.request.Request(endpoint, headers={"Accept": "application/json", "User-Agent": "CareerPilot/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp: data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    description = data.get("content") or data.get("description") or data.get("job_description") or ""
+    parser = _TextExtractor(); parser.feed(str(description))
+    text = parser.text()
+    local = _local_extract(text)
+    local.update({"title": data.get("title") or local.get("title"), "company": data.get("company_name") or data.get("company") or board, "city": data.get("location", {}).get("name") if isinstance(data.get("location"), dict) else data.get("categories", {}).get("location", "") if isinstance(data.get("categories"), dict) else "", "description": text, "posting_type": "社会招聘", "work_type": "远程" if data.get("workplace_type") == "remote" else "全职"})
+    return _normalize_extracted_job(local, text, url)
+
+
 class _TextExtractor(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -197,6 +224,9 @@ def extract_job_from_url(url):
     mokahr_job = _mokahr_job_from_url(url)
     if mokahr_job:
         return mokahr_job
+    ats_job = _public_ats_job_from_url(url)
+    if ats_job:
+        return ats_job
     text = fetch_url_text(url)
     if not text or len(text) < 100:
         raise ValueError("页面内容过少，可能是登录页或反爬限制")
