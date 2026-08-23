@@ -59,6 +59,8 @@ def _mokahr_job_from_url(url):
     data, _ = json.JSONDecoder().raw_decode("{" + text[marker:])
     job = data.get("data") or {}
     description = str(job.get("jobDescription") or job.get("description") or job.get("content") or "")
+    if not description:
+        description = next((str(value) for value in job.values() if isinstance(value, str) and ("岗位职责" in value or "任职要求" in value or len(value) > 500)), "")
     parser = _TextExtractor(); parser.feed(description)
     local = _local_extract(parser.text())
     local.update({
