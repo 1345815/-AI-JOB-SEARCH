@@ -196,7 +196,7 @@ def search_jobs(query: dict, settings: dict) -> list[dict]:
         except Exception:
             pass
         return (real_results + local + suggested)[:limit]
-    except Exception: return local[:limit]
+    except Exception: return (real_results + local)[:limit]
 
 
 def search_freehire_jobs(query: dict, limit=20) -> list[dict]:

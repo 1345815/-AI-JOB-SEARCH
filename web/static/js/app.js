@@ -438,11 +438,13 @@
     var detailHtml = selected ? jobDetail(selected) : '<div class="panel"><div class="panel-body">' + emptyBlock("选择岗位查看评估", "") + "</div></div>";
 
     var searchHtml = "";
-    var pendingSearchCount = (state.searchResults || []).filter(function (job) { return job.source === "local" && !job.saved_job_id; }).length;
+    var pendingSearchCount = (state.searchResults || []).filter(function (job) { return ["local", "freehire"].indexOf(job.source) >= 0 && !job.saved_job_id; }).length;
     if (state.searchResults && state.searchResults.length) {
+      var verifiedCount = state.searchResults.filter(function (job) { return job.source === "freehire" || (job.url && job.source !== "llm_suggested"); }).length;
+      var aiCount = state.searchResults.filter(function (job) { return job.source === "llm_suggested"; }).length;
       searchHtml =
         '<div class="panel mb-14" id="searchResultsPanel"><div class="panel-head">' +
-        '<strong>搜索结果</strong><span class="sub">' + state.searchResults.length + " 个 · 关键词：" + esc(state.searchKeyword || "") + "</span></div>" +
+        '<strong>搜索结果</strong><span class="sub">' + state.searchResults.length + " 个 · 关键词：" + esc(state.searchKeyword || "") + ' · 真实来源 ' + verifiedCount + ' · AI 建议 ' + aiCount + '</span></div>' +
         '<div class="panel-body" style="padding:10px 12px">' +
         '<div class="flex" style="gap:8px;margin-bottom:10px">' +
         '<button class="btn btn-sm btn-primary" id="addSearchAll"' + (pendingSearchCount ? "" : " disabled") + '>全部加入岗位库' + (pendingSearchCount ? "（" + pendingSearchCount + "）" : "") + "</button>" +
@@ -644,7 +646,7 @@
   }
 
   async function addSearchResultsToLibrary() {
-    var pending = (state.searchResults || []).filter(function (job) { return job && job.source === "local" && !job.saved_job_id; });
+    var pending = (state.searchResults || []).filter(function (job) { return job && ["local", "freehire"].indexOf(job.source) >= 0 && !job.saved_job_id; });
     if (!pending.length) { toast("结果都已加入岗位库", "info"); return; }
     var btn = el("addSearchAll");
     if (btn) { btn.disabled = true; btn.textContent = "正在加入…"; }
@@ -672,7 +674,7 @@
       title: job.title || "未命名岗位", company: job.company || "未知公司", city: job.city || "",
       posting_type: job.posting_type || "未知", work_type: job.work_type || "全职", salary: job.salary || "",
       deadline: job.deadline || "", tags: Array.isArray(job.tags) ? job.tags : [], url: job.url || "",
-      description: job.description || "", requirements: Array.isArray(job.requirements) ? job.requirements : [], source: "local"
+      description: job.description || "", requirements: Array.isArray(job.requirements) ? job.requirements : [], source: job.source || "local"
     }});
   }
 
