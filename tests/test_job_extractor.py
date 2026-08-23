@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web"))
 
-from job_extractor import _local_extract  # noqa: E402
+from job_extractor import _local_extract, _normalize_extracted_job, extract_job_from_url  # noqa: E402
 
 
 def test_local_extract_job():
@@ -25,3 +25,29 @@ def test_local_extract_job():
 def test_local_extract_no_requirements():
     job = _local_extract("只有简单页面内容，没有任职要求分区。")
     assert job["requirements"] == []
+
+
+def test_normalize_extracted_job_keeps_structured_fields_and_falls_back_company():
+    job = _normalize_extracted_job(
+        {"title": "AI 产品经理", "requirements": ["熟悉 Python"], "tags": ["Python"]},
+        "AI 产品经理\n岗位职责：负责产品方案设计",
+        "https://example.com/jobs/ai-product",
+    )
+    assert job["title"] == "AI 产品经理"
+    assert job["company"] == "example"
+    assert job["requirements"] == ["熟悉 Python"]
+    assert job["tags"] == ["Python"]
+    assert job["posting_type"] == "未知"
+
+
+def test_normalize_extracted_job_rejects_empty_result():
+    import pytest
+    with pytest.raises(ValueError, match="没有识别到岗位详情"):
+        _normalize_extracted_job({}, "登录后查看")
+
+
+def test_extract_rejects_blocked_page(monkeypatch):
+    import pytest
+    monkeypatch.setattr("job_extractor.fetch_url_text", lambda url: "登录后查看完整职位信息。" + ("提示 " * 60))
+    with pytest.raises(ValueError, match="登录或反爬拦截"):
+        extract_job_from_url("https://example.com/job")

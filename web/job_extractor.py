@@ -91,12 +91,15 @@ def fetch_url_text(url):
             continue
     else:
         html_text = raw.decode("utf-8", errors="replace")
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.I | re.S)
+    page_title = _clean(html.unescape(title_match.group(1))) if title_match else ""
     parser = _TextExtractor()
     try:
         parser.feed(html_text)
     except Exception:
         pass
-    return parser.text()
+    extracted = parser.text()
+    return (page_title + "\n" + extracted).strip() if page_title and page_title not in extracted[:200] else extracted
 
 
 def _clean(value):
@@ -143,28 +146,69 @@ def extract_job_from_url(url):
     text = fetch_url_text(url)
     if not text or len(text) < 100:
         raise ValueError("页面内容过少，可能是登录页或反爬限制")
+    lower_text = text.lower()
+    blocked_markers = ("请登录后查看", "登录后查看", "验证后继续", "access denied", "captcha", "robot check")
+    job_markers = ("岗位职责", "任职要求", "职位要求", "job description", "responsibilities", "requirements")
+    if any(marker in lower_text for marker in blocked_markers) and not any(marker.lower() in lower_text for marker in job_markers):
+        raise ValueError("页面被登录或反爬拦截，无法读取岗位正文；请打开公开岗位详情页")
 
     if llm_available():
         try:
             system = (
-                "你是岗位信息抽取器。只输出 JSON，不要解释。"
-                '字段仅限 {"title","company","requirements","description"}。'
-                "requirements 为任职要求字符串数组，description 为岗位职责简述。"
-                "页面没有的信息输出空字符串或空数组，禁止编造。"
+                "你是严谨的招聘信息结构化抽取器，只输出一个 JSON 对象，不要 Markdown、解释或额外字段。"
+                '字段必须为 {"title":"","company":"","city":"","posting_type":"","work_type":"",'
+                '"salary":"","deadline":"","tags":[],"requirements":[],"description":""}。'
+                "title 只填岗位名称，不要拼接公司名；company 填招聘方；city 填工作地点。"
+                "posting_type 只能填校招/社会招聘/实习/未知，work_type 只能填全职/兼职/实习/远程/未知。"
+                "deadline 只填页面明确写出的截止日期，格式 YYYY-MM-DD，无法确认就留空。"
+                "requirements 只放任职资格、技能、学历、经验等硬性要求，逐条拆分；description 只概括岗位职责；"
+                "tags 只提取页面明确出现的技能标签。页面没有的信息必须留空，禁止猜测、补全或编造。"
             )
-            user = "请从以下页面文本抽取岗位信息：\n\n" + text[:12000]
+            user = (
+                "请从下面的公开岗位页面文本中抽取信息。优先选择岗位详情正文，忽略导航、推荐岗位、登录提示和页脚。"
+                "如果页面是登录页、列表页或反爬提示页，请将 title/company 留空，不要伪造。\n\n"
+                + text[:18000]
+            )
             raw = request_json(system, user)
             if isinstance(raw, dict):
-                return {
-                    "title": str(raw.get("title") or "")[:80],
-                    "company": str(raw.get("company") or "")[:60],
-                    "requirements": [str(r) for r in raw.get("requirements", []) if str(r).strip()][:20],
-                    "description": str(raw.get("description") or "")[:2000],
-                }
+                return _normalize_extracted_job(raw, text, url)
         except RuntimeError:
             pass
 
-    return _local_extract(text)
+    return _normalize_extracted_job(_local_extract(text), text, url)
+
+
+def _normalize_extracted_job(raw, text="", url=""):
+    """统一 AI 和本地抽取结果，避免“解析成功”却生成空壳岗位。"""
+    raw = raw if isinstance(raw, dict) else {}
+    title = _clean(raw.get("title"))[:100]
+    company = _clean(raw.get("company"))[:80]
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not title:
+        for line in lines[:12]:
+            if 2 <= len(line) <= 80 and not re.search(r"(登录|注册|隐私|首页|职位列表)", line, re.I):
+                title = line[:100]
+                break
+    if not company and url:
+        host = urllib.parse.urlparse(url).hostname or ""
+        company = host.removeprefix("www.").split(".")[0][:80]
+    requirements = raw.get("requirements") if isinstance(raw.get("requirements"), list) else []
+    tags = raw.get("tags") if isinstance(raw.get("tags"), list) else []
+    result = {
+        "title": title,
+        "company": company,
+        "city": _clean(raw.get("city"))[:100],
+        "posting_type": _clean(raw.get("posting_type"))[:30] or "未知",
+        "work_type": _clean(raw.get("work_type"))[:30] or "未知",
+        "salary": _clean(raw.get("salary"))[:80],
+        "deadline": _clean(raw.get("deadline"))[:20],
+        "tags": [_clean(item)[:40] for item in tags if _clean(item)][:15],
+        "requirements": [_clean(item)[:240] for item in requirements if _clean(item)][:20],
+        "description": _clean(raw.get("description"))[:3000],
+    }
+    if not result["title"] and not result["description"]:
+        raise ValueError("页面中没有识别到岗位详情，可能是登录页、列表页或反爬页面")
+    return result
 
 def search_jobs(query: dict, settings: dict) -> list[dict]:
     """Local matches plus explicitly marked LLM suggestions, never fake live results."""

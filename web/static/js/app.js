@@ -714,7 +714,7 @@
     var btn = el("jobUrlParse");
     if (!input || !btn) return;
     var run = function () {
-      var url = input.value.trim();
+      var url = input.value.trim().replace(/[\s，。；）】》]+$/g, "");
       var status = el("jobParseStatus");
       if (!/^https?:\/\//i.test(url)) {
         status.innerHTML = '<div class="resume-error">请输入以 http:// 或 https:// 开头的岗位链接</div>';
@@ -723,11 +723,15 @@
       status.innerHTML = '<div class="resume-loading">正在抓取页面并提取岗位要求…</div>';
       btn.disabled = true;
       api("jobs/parse", { method: "POST", body: { url: url } }).then(function (data) {
-        status.innerHTML = "";
-        state.selectedJobId = data.data.id;
+        var parsed = data.data || {};
+        state.selectedJobId = parsed.id;
         return loadJobs().then(function () {
           renderJobs();
-          toast("岗位解析成功，已加入岗位库", "success");
+          var missing = [];
+          if (!parsed.company || parsed.company === "未知公司") missing.push("公司");
+          if (!parsed.description) missing.push("岗位职责");
+          if (!parsed.requirements || !parsed.requirements.length) missing.push("任职要求");
+          toast("已解析「" + (parsed.title || "岗位") + "」并加入岗位库" + (missing.length ? "；缺少 " + missing.join("、") + "，建议打开原帖核对" : ""), missing.length ? "warn" : "success");
         });
       }).catch(function (e) {
         status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
