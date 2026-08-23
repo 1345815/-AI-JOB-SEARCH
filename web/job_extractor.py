@@ -1,6 +1,7 @@
 """岗位网址解析：抓取页面 → 抽取岗位信息。"""
 
 import ipaddress
+import base64
 import re
 import socket
 import time
@@ -10,6 +11,10 @@ import hashlib
 import json
 import html
 import os
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+except Exception:
+    Cipher = algorithms = modes = None
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from html.parser import HTMLParser
@@ -20,6 +25,48 @@ _CACHE_FILE = Path(__file__).with_name("data") / "job_search_cache.json"
 _CACHE_TTL_SECONDS = 6 * 3600
 _KEYWORD_CACHE_TTL_SECONDS = 15 * 60
 _FREEHIRE_API_URL = "https://freehire.me/api/v1/agent/jobs/search"
+
+
+def _mokahr_job_from_url(url):
+    """读取 Mokahr 校招详情接口。Mokahr 页面正文由前端接口返回并 AES-128-CBC 封装。"""
+    parsed = urllib.parse.urlparse(url)
+    if "app.mokahr.com" not in (parsed.hostname or "") or "/campus-recruitment/" not in parsed.path:
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) < 3:
+        return None
+    fragment = urllib.parse.unquote(parsed.fragment or "")
+    match = re.search(r"/job/([0-9a-fA-F-]{20,})", fragment)
+    if not match:
+        return None
+    if Cipher is None:
+        raise ValueError("当前环境缺少 Mokahr 解密依赖，请安装 cryptography")
+    org_id, site_id, job_id = parts[1], parts[2], match.group(1)
+    endpoint = urllib.parse.urljoin(f"{parsed.scheme}://{parsed.netloc}", "/api/outer/ats-apply/website/job")
+    payload = json.dumps({"orgId": org_id, "siteId": site_id, "jobId": job_id, "isInviteResume": True, "locale": "zh-CN"}).encode()
+    req = urllib.request.Request(endpoint, data=payload, method="POST", headers={"Content-Type": "application/json", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        response = json.loads(resp.read().decode("utf-8"))
+    encrypted, key = response.get("data"), response.get("necromancer")
+    if not encrypted or not key:
+        raise ValueError("Mokahr 接口未返回岗位数据")
+    decryptor = Cipher(algorithms.AES(key.encode()[:16]), modes.CBC(b"\0" * 16)).decryptor()
+    raw = decryptor.update(base64.b64decode(encrypted)) + decryptor.finalize()
+    text = raw.decode("utf-8", errors="ignore")
+    marker = text.find('"data":')
+    if marker < 0:
+        raise ValueError("Mokahr 岗位数据解密失败")
+    data, _ = json.JSONDecoder().raw_decode("{" + text[marker:])
+    job = data.get("data") or {}
+    description = str(job.get("jobDescription") or job.get("description") or job.get("content") or "")
+    parser = _TextExtractor(); parser.feed(description)
+    local = _local_extract(parser.text())
+    local.update({
+        "title": job.get("name") or job.get("title") or local.get("title"),
+        "company": job.get("companyName") or job.get("organizationName") or job.get("orgName") or local.get("company"),
+        "posting_type": "校招", "work_type": "全职",
+    })
+    return _normalize_extracted_job(local, parser.text(), url)
 
 
 class _TextExtractor(HTMLParser):
@@ -143,6 +190,9 @@ def _local_extract(text):
 
 
 def extract_job_from_url(url):
+    mokahr_job = _mokahr_job_from_url(url)
+    if mokahr_job:
+        return mokahr_job
     text = fetch_url_text(url)
     if not text or len(text) < 100:
         raise ValueError("页面内容过少，可能是登录页或反爬限制")
