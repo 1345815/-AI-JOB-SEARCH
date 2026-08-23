@@ -362,7 +362,7 @@
 
     el("content").innerHTML =
       '<div class="content-inner">' +
-      '<div class="page-head"><div><h1>求职总览</h1><p>你的 AI 求职工作台：跟踪岗位匹配、申请进度与面试准备。</p></div></div>' +
+      '<div class="dashboard-hero"><div class="page-head"><div><div class="eyebrow">CAREERPILOT · 今日工作台</div><h1>求职总览</h1><p>把搜索、匹配、投递和面试准备集中在一个清晰的流程里。</p></div><div class="hero-action"><span class="hero-status"><i></i>' + (empty ? '档案待完善' : '档案已就绪') + '</span><button class="btn btn-primary" data-open-jobs>开始找岗位</button></div></div></div>' +
       (empty ? '<div class="panel mb-14"><div class="panel-head"><strong>从这里开始</strong><span class="sub">完成后即可获得更准确的岗位推荐</span></div><div class="panel-body"><div class="onboarding"><button class="onboarding-step" data-onboard="profile"><b>1</b><span><strong>完善校园档案</strong><small>学校、专业、毕业时间和求职城市</small></span></button><button class="onboarding-step" data-onboard="profile"><b>2</b><span><strong>上传简历</strong><small>识别后逐项确认写入</small></span></button><button class="onboarding-step" data-onboard="jobs"><b>3</b><span><strong>搜索岗位</strong><small>筛选岗位并查看匹配度</small></span></button><button class="onboarding-step" data-onboard="pipeline"><b>4</b><span><strong>跟踪投递</strong><small>收藏、投递、面试和 Offer</small></span></button></div></div></div>' : '') +
       todayActions +
       '<div class="stat-grid">' +
