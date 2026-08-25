@@ -1,0 +1,50 @@
+# CareerPilot 反向代理示例（nginx）
+# 用法：把 worker 端口填入 upstream，替换 listen 端口后放入 sites-available/
+
+upstream careerpilot_backend {
+    server 127.0.0.1:8001;
+    server 127.0.0.1:8002;
+    server 127.0.0.1:8003;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    client_max_body_size 12m;
+
+    # 健康检查：反代任一 worker
+    location /healthz {
+        proxy_pass http://careerpilot_backend;
+        proxy_connect_timeout 3s;
+    }
+
+    # 静态资源：直出 + 浏览器缓存（web/static/ 已由应用托管时用反代即可；
+    # 若单独部署静态目录，可改为 root 直出）
+    location /static/ {
+        proxy_pass http://careerpilot_backend;
+        proxy_set_header Host $host;
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+
+    location /assets/ {
+        proxy_pass http://careerpilot_backend;
+        proxy_set_header Host $host;
+        expires 7d;
+    }
+
+    # 其余（API + 页面）反代到 worker 池
+    location / {
+        proxy_pass http://careerpilot_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+}
