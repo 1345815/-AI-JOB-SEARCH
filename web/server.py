@@ -409,6 +409,18 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_events_user_time ON events(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT DEFAULT '',
+                link TEXT DEFAULT '',
+                read INTEGER DEFAULT 0,
+                created_at REAL NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read);
             """
         )
         conn.commit()
@@ -1208,6 +1220,147 @@ def funnel_stats(user_id=None):
             ).fetchall()
         conn.close()
     return {row["event_type"]: row["n"] for row in rows}
+
+
+# ---------------------------------------------------------------- 留存触达与通知
+
+def notify(user_id, ntype, title, body="", link=""):
+    """插入站内通知。失败静默，不影响业务主流程。"""
+    try:
+        with _DB_LOCK:
+            conn = db()
+            conn.execute(
+                "INSERT INTO notifications (user_id, type, title, body, link, read, created_at) VALUES (?,?,?,?,?,0,?)",
+                (user_id, ntype, title[:200], body[:500], link[:500], time.time()),
+            )
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
+
+
+def _days_left(date_str):
+    """YYYY-MM-DD 距今天数（按自然日）；无效或空返回 None。"""
+    if not date_str:
+        return None
+    try:
+        import datetime as _dt
+        d = _dt.datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+        today = _dt.date.today()
+        return (d - today).days
+    except (ValueError, TypeError):
+        return None
+
+
+def today_tasks(user_id):
+    """聚合四类待办：跟进 / 截止 / 面试 / 待收藏处理。"""
+    today = time.strftime("%Y-%m-%d")
+    week_later = time.strftime("%Y-%m-%d", time.localtime(time.time() + 7 * 86400))
+    with _DB_LOCK:
+        conn = db()
+        follow_ups = [dict(r) for r in conn.execute(
+            "SELECT id, job_id, company, title, stage, follow_up_at FROM applications"
+            " WHERE user_id=? AND stage IN ('已投递','面试中') AND follow_up_at<>'' AND follow_up_at<=?"
+            " ORDER BY follow_up_at ASC LIMIT 10",
+            (user_id, today),
+        ).fetchall()]
+        deadlines = [dict(r) for r in conn.execute(
+            "SELECT id, title, company, city, deadline FROM jobs"
+            " WHERE deadline<>'' AND deadline>=? AND deadline<=? ORDER BY deadline ASC LIMIT 10",
+            (today, week_later),
+        ).fetchall()]
+        interviews = [dict(r) for r in conn.execute(
+            "SELECT id, job_id, company, title, stage FROM applications"
+            " WHERE user_id=? AND stage='面试中' ORDER BY updated_at DESC LIMIT 10",
+            (user_id,),
+        ).fetchall()]
+        pending = [dict(r) for r in conn.execute(
+            "SELECT id, job_id, company, title, stage FROM applications"
+            " WHERE user_id=? AND stage='已收藏' ORDER BY updated_at DESC LIMIT 5",
+            (user_id,),
+        ).fetchall()]
+        conn.close()
+    for item in follow_ups:
+        item["days_left"] = _days_left(item.get("follow_up_at"))
+    for item in deadlines:
+        item["days_left"] = _days_left(item.get("deadline"))
+    return {
+        "follow_ups": follow_ups,
+        "deadlines": deadlines,
+        "interviews": interviews,
+        "pending": pending,
+    }
+
+
+def list_notifications(user_id, limit=20):
+    with _DB_LOCK:
+        conn = db()
+        rows = [dict(r) for r in conn.execute(
+            "SELECT id, type, title, body, link, read, created_at FROM notifications"
+            " WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()]
+        conn.close()
+    for row in rows:
+        row["time_ago"] = _time_ago(row["created_at"])
+    return rows
+
+
+def _time_ago(ts):
+    try:
+        diff = int(time.time() - ts)
+        if diff < 60:
+            return "刚刚"
+        if diff < 3600:
+            return "%d 分钟前" % (diff // 60)
+        if diff < 86400:
+            return "%d 小时前" % (diff // 3600)
+        return "%d 天前" % (diff // 86400)
+    except (TypeError, ValueError):
+        return ""
+
+
+def mark_notification_read(user_id, notif_id):
+    with _DB_LOCK:
+        conn = db()
+        conn.execute("UPDATE notifications SET read=1 WHERE id=? AND user_id=?", (notif_id, user_id))
+        conn.commit()
+        conn.close()
+
+
+def mark_all_notifications_read(user_id):
+    with _DB_LOCK:
+        conn = db()
+        conn.execute("UPDATE notifications SET read=1 WHERE user_id=? AND read=0", (user_id,))
+        conn.commit()
+        conn.close()
+
+
+def unread_count(user_id):
+    with _DB_LOCK:
+        conn = db()
+        n = conn.execute("SELECT COUNT(*) AS n FROM notifications WHERE user_id=? AND read=0", (user_id,)).fetchone()["n"]
+        conn.close()
+    return n
+
+
+def notify_deadline_if_needed(user_id, job):
+    """岗位 deadline 距今 <=3 天时生成「即将截止」通知（同一 job 只生成一次）。"""
+    if not job:
+        return
+    dl = _days_left(job.get("deadline"))
+    if dl is None or dl > 3:
+        return
+    link = "/jobs/" + str(job["id"])
+    with _DB_LOCK:
+        conn = db()
+        exists = conn.execute(
+            "SELECT 1 FROM notifications WHERE user_id=? AND link=? AND type='deadline' LIMIT 1",
+            (user_id, link),
+        ).fetchone()
+        conn.close()
+    if not exists:
+        notify(user_id, "deadline", "岗位即将截止", "%s · %s 还有 %d 天截止" % (job.get("title", ""), job.get("company", ""), dl), link)
 
 
 def get_evaluation(user_id, job_id):
@@ -2096,6 +2249,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "funnel": funnel_stats(user["id"])})
             return
 
+        if head == "today-tasks" and method == "GET":
+            self._send(200, {"ok": True, "data": today_tasks(user["id"])})
+            return
+
+        if head == "notifications" and method == "GET":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            limit = min(max(int((qs.get("limit") or ["20"])[0]), 1), 50)
+            self._send(200, {"ok": True, "data": list_notifications(user["id"], limit), "unread": unread_count(user["id"])})
+            return
+        if head == "notifications" and len(parts) >= 2 and parts[1] == "read-all" and method == "POST":
+            mark_all_notifications_read(user["id"])
+            self._send(200, {"ok": True, "unread": 0})
+            return
+        if head == "notifications" and len(parts) >= 3 and parts[2] == "read" and method == "POST":
+            mark_notification_read(user["id"], parts[1])
+            self._send(200, {"ok": True, "unread": unread_count(user["id"])})
+            return
+
         if head == "profile" and len(parts) >= 2 and parts[1] == "resume-import":
             return self._api_resume_import(method, parts[2:], user)
 
@@ -2269,6 +2440,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if method == "GET":
                 ev = get_evaluation(user["id"], job_id) or score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})))
+                notify_deadline_if_needed(user["id"], job)
                 self._send(200, {**job, "evaluation": ev})
                 return
             if method == "DELETE":
@@ -2518,6 +2690,7 @@ class Handler(BaseHTTPRequestHandler):
                 conn.close()
             if stage == "面试中":
                 record_event(user["id"], "interview_scheduled", {"application_id": parts[1], "job_id": row["job_id"]})
+                notify(user["id"], "interview", "进入面试阶段", "%s · %s 准备起来" % (row["title"], row["company"]), "/pipeline")
             elif stage == "Offer":
                 record_event(user["id"], "offer_received", {"application_id": parts[1], "job_id": row["job_id"]})
             elif stage == "已投递":

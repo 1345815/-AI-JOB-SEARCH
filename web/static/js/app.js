@@ -166,6 +166,17 @@
     );
   }
 
+  function deadlineTag(deadline) {
+    if (!deadline) return "";
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var d = new Date(String(deadline).slice(0, 10) + "T00:00:00");
+    if (isNaN(d.getTime())) return '<span class="tag tag-warn">截止 ' + esc(deadline) + "</span>";
+    var days = Math.round((d - today) / 86400000);
+    var cls = days < 0 ? "tag-danger" : days <= 3 ? "tag-danger" : days <= 7 ? "tag-warn" : "";
+    var label = days < 0 ? "已过期" : days === 0 ? "今天截止" : "剩 " + days + " 天";
+    return '<span class="tag ' + cls + '" title="截止 ' + esc(deadline) + '">' + label + "</span>";
+  }
+
   function jobCard(job, searchResult, searchIndex) {
     var ev = job.evaluation || {};
     var score = ev.overall || 0;
@@ -177,9 +188,7 @@
     if (job.quality_score) source += '<span class="tag ' + (job.quality_score >= 80 ? 'tag-accent' : job.quality_score >= 55 ? 'tag-warn' : 'tag-danger') + '">质量 ' + esc(job.quality_score) + ' · ' + esc(job.quality_label || '建议核实') + '</span>';
     var prefilter = ev.gates && ev.gates.prefilter;
     var prefilterTag = prefilter ? '<span class="tag ' + (prefilter.status === "recommend" ? "tag-accent" : prefilter.status === "reject" ? "tag-danger" : "tag-warn") + '">' + esc(prefilter.label) + '</span>' : "";
-    var deadline = job.deadline
-      ? '<span class="tag ' + (job.deadline < new Date().toISOString().slice(0, 10) ? "tag-danger" : "tag-warn") + '">截止 ' + esc(job.deadline) + "</span>"
-      : "";
+    var deadline = deadlineTag(job.deadline);
     var searchAction = "";
     if (searchResult) {
       searchAction = job.addedThisSearch
@@ -298,6 +307,94 @@
     api("funnel").then(function (res) {
       state_funnel = res.funnel || {};
       if (state.view === "dashboard") renderDashboard();
+    }).catch(function () {});
+  }
+
+  /* ---------------- 今日待办与通知 ---------------- */
+
+  var state_tasks = null;
+
+  function loadTodayTasks() {
+    api("today-tasks").then(function (res) {
+      state_tasks = res.data || {};
+      if (state.view === "dashboard") renderDashboard();
+    }).catch(function () {});
+  }
+
+  function todayTasksHtml() {
+    var t = state_tasks || {};
+    var blocks = [];
+    function buildBlock(title, icon, items, view) {
+      if (!items || !items.length) return "";
+      var rows = items.map(function (it) {
+        var dl = (it.days_left !== null && it.days_left !== undefined)
+          ? ' <span class="tag ' + (it.days_left <= 3 ? "tag-danger" : it.days_left <= 7 ? "tag-warn" : "") + '">' + dlLabel(it.days_left) + "</span>"
+          : "";
+        return (
+          '<div class="list-row">' +
+          '<div class="row-main"><div class="row-title">' + esc(it.title || it.company || "") + "</div>" +
+          '<div class="row-sub">' + esc(it.company || "") + (it.stage ? " · " + esc(it.stage) : "") + dl + "</div></div>" +
+          '<button class="btn btn-sm btn-primary" data-task-go="' + view + '">去处理</button></div>'
+        );
+      }).join("");
+      return '<div class="panel"><div class="panel-head"><strong>' + icon + " " + title + '</strong><span class="sub">' + items.length + " 条</span></div><div class=\"panel-body\" style=\"padding:0\">" + rows + "</div></div>";
+    }
+    blocks.push(buildBlock("今天该跟进", "⏰", t.follow_ups, "pipeline"));
+    blocks.push(buildBlock("即将截止", "⚡", t.deadlines, "jobs"));
+    blocks.push(buildBlock("面试准备", "🎯", t.interviews, "pipeline"));
+    blocks.push(buildBlock("待处理收藏", "📌", t.pending, "pipeline"));
+    var active = blocks.filter(function (b) { return b; });
+    if (!active.length) {
+      return '<div class="panel"><div class="panel-body"><div class="empty"><strong>今天没有待办</strong><span>去搜索真实岗位、跟进申请，这里会聚合你的行动清单。</span><button class="btn btn-primary mt-8" data-open-jobs>去找岗位</button></div></div></div>';
+    }
+    var half = Math.ceil(active.length / 2);
+    return '<div class="grid-2 mb-14">' + active.slice(0, half).join("") + "</div>" + (active.length > half ? '<div class="grid-2 mb-14">' + active.slice(half).join("") + "</div>" : "");
+  }
+
+  function dlLabel(days) {
+    if (days < 0) return "已过期";
+    if (days === 0) return "今天截止";
+    return "剩 " + days + " 天";
+  }
+
+  /* ---------------- 通知中心 ---------------- */
+
+  function loadNotifications() {
+    api("notifications?limit=20").then(function (res) {
+      var list = el("notifList");
+      if (!list) return;
+      var items = res.data || [];
+      el("notifBadge").textContent = res.unread || 0;
+      el("notifBadge").classList.toggle("hide", !(res.unread > 0));
+      list.innerHTML = items.length
+        ? items.map(function (n) {
+            return '<div class="notif-item' + (n.read ? "" : " unread") + '" data-notif-id="' + n.id + '">' +
+              '<div class="notif-title">' + esc(n.title) + "</div>" +
+              (n.body ? '<div class="notif-body">' + esc(n.body) + "</div>" : "") +
+              '<div class="notif-meta">' + esc(n.time_ago || "") + "</div></div>";
+          }).join("")
+        : '<div class="empty"><strong>暂无通知</strong><span>岗位截止、面试节点等提醒会出现在这里。</span></div>';
+      document.querySelectorAll("[data-notif-id]").forEach(function (node) {
+        node.addEventListener("click", function () {
+          markNotifRead(node.getAttribute("data-notif-id"));
+        });
+      });
+    }).catch(function () {});
+  }
+
+  function markNotifRead(id) {
+    api("notifications/" + id + "/read", { method: "POST" }).then(function (res) {
+      el("notifBadge").textContent = res.unread || 0;
+      el("notifBadge").classList.toggle("hide", !(res.unread > 0));
+      loadNotifications();
+    }).catch(function () {});
+  }
+
+  function markAllNotifRead() {
+    api("notifications/read-all", { method: "POST" }).then(function () {
+      el("notifBadge").textContent = "0";
+      el("notifBadge").classList.add("hide");
+      loadNotifications();
     }).catch(function () {});
   }
 
@@ -429,6 +526,7 @@
       '<div class="content-inner">' +
       '<div class="dashboard-hero"><div class="page-head"><div><div class="eyebrow">CAREERPILOT · 今日工作台</div><h1>求职总览</h1><p>把搜索、匹配、投递和面试准备集中在一个清晰的流程里。</p></div><div class="hero-action"><span class="hero-status"><i></i>' + (empty ? '档案待完善' : '档案已就绪') + '</span><button class="btn btn-primary" data-open-jobs>开始找岗位</button></div></div></div>' +
       (empty ? '<div class="panel mb-14"><div class="panel-head"><strong>从这里开始</strong><span class="sub">完成后即可获得更准确的岗位推荐</span></div><div class="panel-body"><div class="onboarding"><button class="onboarding-step" data-onboard="profile"><b>1</b><span><strong>完善校园档案</strong><small>学校、专业、毕业时间和求职城市</small></span></button><button class="onboarding-step" data-onboard="profile"><b>2</b><span><strong>上传简历</strong><small>识别后逐项确认写入</small></span></button><button class="onboarding-step" data-onboard="jobs"><b>3</b><span><strong>搜索岗位</strong><small>筛选岗位并查看匹配度</small></span></button><button class="onboarding-step" data-onboard="pipeline"><b>4</b><span><strong>跟踪投递</strong><small>收藏、投递、面试和 Offer</small></span></button></div></div></div>' : '') +
+      todayTasksHtml() +
       todayActions +
       '<div class="stat-grid">' +
       statCard("岗位池", jobs.length, "stat-accent", "内置 + 手动录入") +
@@ -469,6 +567,12 @@
     });
     document.querySelectorAll("[data-open-jobs]").forEach(function (button) {
       button.addEventListener("click", function () { state.view = "jobs"; location.hash = "#/jobs"; });
+    });
+    document.querySelectorAll("[data-task-go]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        state.view = button.getAttribute("data-task-go");
+        location.hash = "#/" + button.getAttribute("data-task-go");
+      });
     });
   }
 
@@ -2087,6 +2191,16 @@
     el("profileBannerBtn").addEventListener("click", function () { location.hash = "#/profile"; });
     el("userMenuBtn").addEventListener("click", function (e) { e.stopPropagation(); el("userDropdown").classList.toggle("hide"); });
     el("menuProfile").addEventListener("click", function () { el("userDropdown").classList.add("hide"); location.hash = "#/profile"; });
+    el("notifToggle").addEventListener("click", function (e) {
+      e.stopPropagation();
+      var dd = el("notifDropdown");
+      dd.classList.toggle("hide");
+      if (!dd.classList.contains("hide")) loadNotifications();
+    });
+    el("notifReadAll").addEventListener("click", function () { markAllNotifRead(); });
+    document.addEventListener("click", function (e) {
+      if (!e.target.closest("#notifWrap")) el("notifDropdown").classList.add("hide");
+    });
     el("menuUpgrade").addEventListener("click", function () { el("userDropdown").classList.add("hide"); el("upgradeModal").classList.add("open"); });
     el("menuLogout").addEventListener("click", logout);
     el("upgradeBtn").addEventListener("click", function () {
@@ -2115,6 +2229,8 @@
       route();
       if (state.profile && state.profile.onboarding_completed) loadDailyRecommendations();
       loadFunnel();
+      loadTodayTasks();
+      loadNotifications();
     } catch (e) {
       el("content").innerHTML = '<div class="content-inner"><div class="panel"><div class="panel-body">' + emptyBlock("加载失败", e.message) + "</div></div></div>";
     }
