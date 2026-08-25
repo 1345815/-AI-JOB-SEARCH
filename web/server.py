@@ -35,6 +35,15 @@ from resume_extractor import extract_profile_from_resume
 from resume_parser import extract_resume_text
 from db_backup import start_backup_scheduler
 
+try:
+    from tasks import create_task, get_task, list_tasks, retry_task, VALID_TASK_TYPES
+    from worker import WorkerPool
+except ImportError:  # python -m web.server 包模式：web 目录不在 sys.path
+    from web.tasks import create_task, get_task, list_tasks, retry_task, VALID_TASK_TYPES
+    from web.worker import WorkerPool
+
+_worker_pool = None
+
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 STATIC_DIR = ROOT / "static"
@@ -361,6 +370,35 @@ def init_db():
                 updated_at TEXT DEFAULT (datetime('now', 'localtime')),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                task_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                input_json TEXT NOT NULL,
+                result_json TEXT DEFAULT '',
+                error TEXT DEFAULT '',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                worker_id TEXT DEFAULT '',
+                created_at REAL NOT NULL,
+                started_at REAL,
+                finished_at REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+            CREATE INDEX IF NOT EXISTS idx_tasks_user_created ON tasks(user_id, created_at);
+            CREATE TABLE IF NOT EXISTS task_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                worker_id TEXT DEFAULT '',
+                run_status TEXT NOT NULL,
+                started_at REAL NOT NULL,
+                finished_at REAL,
+                error TEXT DEFAULT '',
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id);
             """
         )
         conn.commit()
@@ -373,6 +411,10 @@ def init_db():
         ):
             if name not in app_columns:
                 cur.execute("ALTER TABLE applications ADD COLUMN " + name + " " + definition)
+        # Enterprise admin: users.disabled for account governance.
+        user_columns = {row["name"] for row in cur.execute("PRAGMA table_info(users)").fetchall()}
+        if "disabled" not in user_columns:
+            cur.execute("ALTER TABLE users ADD COLUMN disabled INTEGER DEFAULT 0")
         conn.commit()
         cur.execute("SELECT COUNT(*) AS n FROM jobs")
         if cur.fetchone()["n"] == 0:
@@ -507,7 +549,109 @@ def user_public(user):
         "username": user["username"],
         "email": user.get("email"),
         "role": user.get("role", "guest"),
+        "disabled": bool(user.get("disabled")),
         "profile": profile,
+    }
+
+
+# ---------------------------------------------------------------- 管理员与运营
+
+def is_admin(user):
+    """判断用户是否为管理员角色。兼容 dict 与 sqlite3.Row。"""
+    if not user:
+        return False
+    try:
+        role = user.get("role") if hasattr(user, "get") else (user["role"] if "role" in user.keys() else None)
+    except Exception:
+        return False
+    return role == "admin"
+
+
+def get_user_by_id(user_id):
+    with _DB_LOCK:
+        conn = db()
+        row = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        conn.close()
+    return row
+
+
+def list_users(limit=20, offset=0, query=""):
+    """分页列出用户，返回不含密码哈希的公开字段。"""
+    with _DB_LOCK:
+        conn = db()
+        sql = "SELECT id, username, email, role, disabled, created_at, updated_at FROM users"
+        args = []
+        if query:
+            sql += " WHERE username LIKE ? OR email LIKE ?"
+            like = "%" + query + "%"
+            args = [like, like]
+        sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        args += [limit, offset]
+        rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
+        conn.close()
+    return rows
+
+
+def set_user_disabled(user_id, disabled):
+    with _DB_LOCK:
+        conn = db()
+        conn.execute(
+            "UPDATE users SET disabled=?, updated_at=datetime('now', 'localtime') WHERE id=?",
+            (1 if disabled else 0, user_id),
+        )
+        conn.commit()
+        # 停用用户立即失效其全部会话。
+        if disabled:
+            conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            conn.commit()
+        conn.close()
+
+
+def set_user_role(user_id, role):
+    with _DB_LOCK:
+        conn = db()
+        conn.execute(
+            "UPDATE users SET role=?, updated_at=datetime('now', 'localtime') WHERE id=?",
+            (role, user_id),
+        )
+        conn.commit()
+        conn.close()
+
+
+def admin_overview():
+    """运营总览：用户/活跃/岗位/申请/任务/存储/LLM 状态。"""
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    cutoff7 = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 7 * 86400))
+    with _DB_LOCK:
+        conn = db()
+        users_total = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+        users_active = conn.execute(
+            "SELECT COUNT(DISTINCT user_id) AS n FROM sessions WHERE created_at >= ?",
+            (cutoff7,),
+        ).fetchone()["n"]
+        jobs_total = conn.execute("SELECT COUNT(*) AS n FROM jobs").fetchone()["n"]
+        apps_total = conn.execute("SELECT COUNT(*) AS n FROM applications").fetchone()["n"]
+        apps_by_stage = {
+            row["stage"]: row["n"]
+            for row in conn.execute("SELECT stage, COUNT(*) AS n FROM applications GROUP BY stage").fetchall()
+        }
+        tasks_total = conn.execute("SELECT COUNT(*) AS n FROM tasks").fetchone()["n"]
+        tasks_failed = conn.execute("SELECT COUNT(*) AS n FROM tasks WHERE status='failed'").fetchone()["n"]
+        tasks_succeeded = conn.execute("SELECT COUNT(*) AS n FROM tasks WHERE status='succeeded'").fetchone()["n"]
+        conn.close()
+    settings = load_settings()
+    return {
+        "users_total": users_total,
+        "users_active_7d": users_active,
+        "jobs_total": jobs_total,
+        "applications_total": apps_total,
+        "applications_by_stage": apps_by_stage,
+        "tasks_total": tasks_total,
+        "tasks_succeeded": tasks_succeeded,
+        "tasks_failed": tasks_failed,
+        "db_size_bytes": DB_FILE.stat().st_size if DB_FILE.exists() else 0,
+        "llm_enabled": bool(settings.get("enabled") and settings.get("api_key")),
+        "server_time": now,
     }
 
 
@@ -1857,6 +2001,51 @@ class Handler(BaseHTTPRequestHandler):
             scored.sort(key=lambda x: (x.get("evaluation") or {}).get("overall", 0), reverse=True)
             self._send(200, {"ok": True, "data": scored[:2], "generated_at": time.strftime("%Y-%m-%d")}); return
 
+        if head == "admin":
+            if not is_admin(user):
+                self._send(403, {"ok": False, "error": "需要管理员权限"})
+                return
+            if len(parts) == 1:
+                self._send(400, {"ok": False, "error": "缺少管理子路径"})
+                return
+            sub = parts[1]
+            if sub == "overview" and method == "GET":
+                self._send(200, {"ok": True, "data": admin_overview()})
+                return
+            if sub == "users" and method == "GET":
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                limit = min(max(int(qs.get("limit", ["20"])[0] or 20), 1), 100)
+                offset = max(int(qs.get("offset", ["0"])[0] or 0), 0)
+                query = (qs.get("q") or [""])[0][:80]
+                self._send(200, {"ok": True, "data": list_users(limit, offset, query)})
+                return
+            if sub == "users" and len(parts) >= 3 and method == "PATCH":
+                target_id = parts[2]
+                target = get_user_by_id(target_id)
+                if not target:
+                    self._send(404, {"ok": False, "error": "用户不存在"})
+                    return
+                if str(target_id) == str(user["id"]):
+                    self._send(400, {"ok": False, "error": "不能对自己执行该操作"})
+                    return
+                body = self._json_body() or {}
+                action = body.get("action")
+                if action == "disable":
+                    set_user_disabled(target_id, True)
+                elif action == "enable":
+                    set_user_disabled(target_id, False)
+                elif action == "set_admin":
+                    set_user_role(target_id, "admin")
+                elif action == "remove_admin":
+                    set_user_role(target_id, "user")
+                else:
+                    self._send(400, {"ok": False, "error": "未知操作"})
+                    return
+                self._send(200, {"ok": True})
+                return
+            self._send(404, {"ok": False, "error": "not found"})
+            return
+
         if head == "profile" and len(parts) >= 2 and parts[1] == "resume-import":
             return self._api_resume_import(method, parts[2:], user)
 
@@ -2040,6 +2229,46 @@ class Handler(BaseHTTPRequestHandler):
                     conn.close()
                 self._send(200, {"ok": True})
                 return
+
+        if head == "tasks" and method == "POST" and len(parts) == 1:
+            body = self._json_body() or {}
+            task_type = body.get("task_type")
+            if task_type not in VALID_TASK_TYPES:
+                self._send(400, {"ok": False, "error": "不支持的 task_type：%s" % task_type})
+                return
+            payload = dict(body.get("input") or {})
+            if task_type in ("resume.generate", "cover_letter.generate", "interview.generate"):
+                payload.setdefault("profile", normalize_profile(_safe_json(user.get("profile_json"), {})))
+            task = create_task(user["id"], task_type, payload)
+            self._send(200, {"ok": True, "task": task})
+            return
+
+        if head == "tasks" and method == "GET" and len(parts) == 1:
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            status = (qs.get("status") or [None])[0]
+            limit = int((qs.get("limit") or ["50"])[0])
+            tasks = list_tasks(user_id=user["id"], status=status, limit=limit)
+            self._send(200, {"ok": True, "tasks": tasks})
+            return
+
+        if head == "tasks" and len(parts) >= 2:
+            task_id = parts[1]
+            if method == "POST" and len(parts) >= 3 and parts[2] == "retry":
+                ok = retry_task(task_id, user_id=user["id"])
+                if not ok:
+                    self._send(404, {"ok": False, "error": "任务不存在或不可重试"})
+                    return
+                self._send(200, {"ok": True, "task": get_task(task_id, user_id=user["id"])})
+                return
+            if method == "GET":
+                task = get_task(task_id, user_id=user["id"])
+                if not task:
+                    self._send(404, {"ok": False, "error": "任务不存在"})
+                    return
+                self._send(200, {"ok": True, "task": task})
+                return
+            self._send(405, {"ok": False, "error": "method not allowed"})
+            return
 
         if head == "documents" and method == "POST":
             body = self._json_body()
@@ -2316,9 +2545,17 @@ class Handler(BaseHTTPRequestHandler):
                     conn.close()
                     self._send(400, {"ok": False, "error": "用户名或邮箱已存在"})
                     return
+                # 首个注册用户自动成为 admin；或命中 CAREERPILOT_ADMIN_USERNAME 列表。
+                env_admins = {
+                    u.strip().lower()
+                    for u in os.environ.get("CAREERPILOT_ADMIN_USERNAME", "").split(",")
+                    if u.strip()
+                }
+                user_count = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+                role = "admin" if (user_count == 0 or username.lower() in env_admins) else "user"
                 cur = conn.execute(
-                    "INSERT INTO users (username, email, password_hash, role, profile_json) VALUES (?,?,?, 'user', '{}')",
-                    (username, email, hash_password(password)),
+                    "INSERT INTO users (username, email, password_hash, role, profile_json) VALUES (?,?,?,?, '{}')",
+                    (username, email, hash_password(password), role),
                 )
                 conn.commit()
                 user_id = cur.lastrowid
@@ -2347,6 +2584,9 @@ class Handler(BaseHTTPRequestHandler):
             if not row or not row["password_hash"] or not verify_password(password, row["password_hash"]):
                 record_login_failure(rate_key)
                 self._send(400, {"ok": False, "error": "用户名或密码错误（支持用户名或邮箱，不区分大小写）"})
+                return
+            if row.get("disabled"):
+                self._send(403, {"ok": False, "error": "账号已被停用，请联系管理员"})
                 return
             clear_login_failures(rate_key)
             remember=bool(body.get("remember",True)); token = create_session(row["id"],2592000 if remember else None)
@@ -2476,6 +2716,10 @@ def main():
     args = parser.parse_args()
 
     init_db()
+    global _worker_pool
+    if os.environ.get("TASK_QUEUE_ENABLED", "1") == "1":
+        _worker_pool = WorkerPool()
+        _worker_pool.start()
     if os.environ.get("BACKUP_ENABLED", "1") == "1":
         start_backup_scheduler(
             DB_FILE,
