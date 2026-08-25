@@ -262,6 +262,9 @@
     var roleLabel = user.role === "guest" ? "游客" : user.role === "admin" ? "管理员" : "用户";
     el("userRole").textContent = roleLabel;
     el("menuUpgrade").classList.toggle("hide", user.role !== "guest");
+    document.querySelectorAll('.nav-item[data-view="admin"]').forEach(function (btn) {
+      btn.classList.toggle("hide", user.role !== "admin");
+    });
     updateProfileBanner();
     if (!state.profile.onboarding_completed && !sessionStorage.getItem("careerpilot_onboarding_later")) setTimeout(openOnboarding, 350);
   }
@@ -868,11 +871,41 @@
     } catch (e) { toast(e.message, "error"); }
   }
 
+  async function submitTask(taskType, input) {
+    var data = await api("tasks", { method: "POST", body: { task_type: taskType, input: input } });
+    return data.task;
+  }
+
+  async function pollTask(taskId, onStatus) {
+    var task;
+    while (true) {
+      var data = await api("tasks/" + taskId);
+      task = data.task;
+      if (onStatus) onStatus(task);
+      if (task.status === "succeeded" || task.status === "failed") return task;
+      await new Promise(function (res) { setTimeout(res, 1500); });
+    }
+  }
+
   async function generateDoc(job, kind) {
     var label = kind === "resume" ? "简历" : "求职信";
-    toast("正在生成" + label + "…");
+    toast("已提交" + label + "生成任务…");
     try {
-      var doc = await api("documents", { method: "POST", body: { job_id: job.id, kind: kind } });
+      var taskType = kind === "resume" ? "resume.generate" : "cover_letter.generate";
+      var task = await submitTask(taskType, { job_id: job.id });
+      var last = "pending";
+      var done = await pollTask(task.id, function (t) {
+        if (t.status !== last) {
+          last = t.status;
+          if (t.status === "pending") toast("任务排队中…");
+          else if (t.status === "running") toast("AI 正在生成" + label + "…");
+        }
+      });
+      if (done.status === "failed") {
+        toast("生成失败：" + (done.error || "未知错误") + "（可稍后重试）", "error");
+        return;
+      }
+      var doc = done.result || {};
       showDocModal(doc.content, (kind === "resume" ? "定制简历" : "定制求职信") + " · " + job.company, doc.id);
     } catch (e) { toast("生成失败：" + e.message, "error"); }
   }
@@ -1101,9 +1134,22 @@
   }
 
   async function prepareInterview(job) {
-    toast("正在生成面试准备包…");
+    toast("已提交面试准备生成任务…");
     try {
-      var data = await api("interview", { method: "POST", body: { job_id: job.id } });
+      var task = await submitTask("interview.generate", { job_id: job.id });
+      var last = "pending";
+      var done = await pollTask(task.id, function (t) {
+        if (t.status !== last) {
+          last = t.status;
+          if (t.status === "pending") toast("任务排队中…");
+          else if (t.status === "running") toast("AI 正在生成面试准备包…");
+        }
+      });
+      if (done.status === "failed") {
+        toast("生成失败：" + (done.error || "未知错误") + "（可稍后重试）", "error");
+        return;
+      }
+      var data = done.result || {};
       state.interviewJobId = job.id;
       state.interviewContent = data.content;
       if (state.view === "interview") renderInterview();
@@ -1124,6 +1170,86 @@
     return issues;
   }
 
+
+  /* ---------------- 运营管理（admin） ---------------- */
+
+  function renderAdmin() {
+    el("content").innerHTML =
+      '<div class="content-inner">' +
+      '<div class="page-head"><div><h1>运营管理</h1><p>系统运营总览与用户治理。</p></div></div>' +
+      '<div id="adminStats" class="stat-grid"></div>' +
+      '<div class="panel mt-14"><div class="panel-head"><strong>用户管理</strong><span class="sub">停用、启用、设置或撤销管理员</span></div>' +
+      '<div class="panel-body" style="padding:0" id="adminUsers"></div></div>' +
+      "</div>";
+    loadAdminOverview();
+    loadAdminUsers();
+  }
+
+  function loadAdminOverview() {
+    api("admin/overview").then(function (res) {
+      var d = res.data || {};
+      var stages = d.applications_by_stage || {};
+      var cards = [
+        statCard("用户总数", d.users_total, "stat-accent", "7 日活跃 " + (d.users_active_7d || 0)),
+        statCard("岗位池", d.jobs_total, "stat-info", "内置 + 搜索入库"),
+        statCard("申请记录", d.applications_total, "stat-info", ["已投递", "面试中", "Offer"].map(function (s) { return s + " " + (stages[s] || 0); }).join(" · ")),
+        statCard("任务队列", d.tasks_total, "stat-info", "成功 " + (d.tasks_succeeded || 0) + " · 失败 " + (d.tasks_failed || 0)),
+        statCard("存储占用", fmtBytes(d.db_size_bytes), "stat-accent", "SQLite 单文件"),
+        statCard("AI 增强", d.llm_enabled ? "已启用" : "未配置", d.llm_enabled ? "stat-accent" : "", "管理员可到设置配置")
+      ];
+      var host = el("adminStats");
+      if (host) host.innerHTML = cards.join("");
+    }).catch(function (err) { toast("加载运营数据失败：" + err.message, "error"); });
+  }
+
+  function fmtBytes(bytes) {
+    if (!bytes && bytes !== 0) return "—";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
+  }
+
+  function loadAdminUsers() {
+    api("admin/users?limit=100").then(function (res) {
+      var rows = res.data || [];
+      if (!rows.length) {
+        el("adminUsers").innerHTML = '<div class="empty"><strong>暂无用户</strong></div>';
+        return;
+      }
+      el("adminUsers").innerHTML =
+        '<div class="table-wrap"><table class="admin-table"><thead><tr><th>用户</th><th>角色</th><th>注册时间</th><th>状态</th><th>操作</th></tr></thead><tbody>' +
+        rows.map(function (u) {
+          var roleCls = u.role === "admin" ? "tag-accent" : u.role === "guest" ? "tag-warn" : "tag";
+          var actions = [];
+          if (u.role !== "admin") actions.push('<button class="btn btn-sm" data-admin-action="set_admin" data-admin-id="' + u.id + '">设为管理员</button>');
+          else actions.push('<button class="btn btn-sm" data-admin-action="remove_admin" data-admin-id="' + u.id + '">撤销管理员</button>');
+          if (u.disabled) actions.push('<button class="btn btn-sm btn-primary" data-admin-action="enable" data-admin-id="' + u.id + '">启用</button>');
+          else actions.push('<button class="btn btn-sm" data-admin-action="disable" data-admin-id="' + u.id + '">停用</button>');
+          return (
+            '<tr><td><div class="row-title">' + esc(u.username) + "</div>" +
+            '<div class="muted text-sm">' + esc(u.email || "无邮箱") + "</div></td>" +
+            '<td><span class="' + roleCls + '">' + esc(u.role) + "</span></td>" +
+            "<td>" + esc((u.created_at || "").slice(0, 10)) + "</td>" +
+            '<td>' + (u.disabled ? '<span class="tag tag-danger">已停用</span>' : '<span class="tag">正常</span>') + "</td>" +
+            '<td>' + actions.join(" ") + "</td></tr>"
+          );
+        }).join("") +
+        "</tbody></table></div>";
+      document.querySelectorAll("[data-admin-action]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          adminUserAction(btn.getAttribute("data-admin-id"), btn.getAttribute("data-admin-action"));
+        });
+      });
+    }).catch(function (err) { toast("加载用户列表失败：" + err.message, "error"); });
+  }
+
+  function adminUserAction(userId, action) {
+    api("admin/users/" + userId, { method: "PATCH", body: { action: action } }).then(function () {
+      toast("操作成功", "success");
+      loadAdminUsers();
+      loadAdminOverview();
+    }).catch(function (err) { toast(err.message, "error"); });
+  }
 
   function renderProfile() {
     var p = state.profile || {};
@@ -1852,7 +1978,8 @@
     jobs: "岗位搜索",
     pipeline: "申请进度",
     interview: "面试准备",
-    profile: "简历库"
+    profile: "简历库",
+    admin: "运营管理"
   };
 
   function route() {
@@ -1869,6 +1996,7 @@
     else if (state.view === "pipeline") renderPipeline();
     else if (state.view === "interview") renderInterview();
     else if (state.view === "profile") renderProfile();
+    else if (state.view === "admin") renderAdmin();
   }
 
   function openSidebar() { el("sidebar").classList.add("open"); el("sidebarScrim").classList.remove("hide"); }
