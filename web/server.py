@@ -880,13 +880,25 @@ def filter_jobs(jobs, query):
 
 
 def search_source_health(results):
-    """返回搜索来源概况，让前端明确哪些是抓到的真实岗位。"""
+    """返回搜索来源概况：数量 + 各源真实健康状态（熔断/健康注册表）。"""
     counts = {}
     for item in results or []:
         source = item.get("source") or "unknown"
         counts[source] = counts.get(source, 0) + 1
     labels = {"freehire": "FreeHire ATS", "web_search": "网页解析", "URL解析": "岗位链接", "local": "本地岗位", "llm_suggested": "AI 建议"}
-    return [{"source": key, "label": labels.get(key, key), "count": value, "verified": key not in ("llm_suggested", "local")} for key, value in counts.items()]
+    try:
+        from http_client import health_snapshot
+        health = health_snapshot()
+    except Exception:
+        health = {}
+    out = []
+    for key, value in counts.items():
+        entry = {"source": key, "label": labels.get(key, key), "count": value, "verified": key not in ("llm_suggested", "local")}
+        src_key = {"web_search": "web", "URL解析": "web"}.get(key, key)
+        if src_key in health:
+            entry["health"] = health[src_key]
+        out.append(entry)
+    return out
 
 
 def mark_saved_search_results(results):
@@ -2649,6 +2661,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "funnel": funnel_stats(user["id"])})
             return
 
+        if head == "sources" and len(parts) >= 2 and parts[1] == "health" and method == "GET":
+            from http_client import health_snapshot
+            self._send(200, {"ok": True, "sources": health_snapshot()})
+            return
+
         if head == "teams" and method == "POST":
             body = self._json_body() or {}
             name = (body.get("name") or "").strip()
@@ -2844,7 +2861,24 @@ class Handler(BaseHTTPRequestHandler):
         if head=="jobs" and len(parts)==2 and parts[1]=="search" and method=="GET":
             s=load_settings(); self._send(200,{"ok":True,"data":{"enabled":bool(s.get("enabled") and s.get("api_key") and s.get("base_url")),"provider":s.get("provider","custom"),"model":s.get("model",""),"has_key":bool(s.get("api_key"))}}); return
         if head=="jobs" and len(parts)==2 and parts[1]=="search" and method=="POST":
-            query=self._json_body(); s=load_settings(); enabled=bool(s.get("enabled") and s.get("api_key") and s.get("base_url")); results=search_jobs(query,s)
+            query=self._json_body(); s=load_settings(); enabled=bool(s.get("enabled") and s.get("api_key") and s.get("base_url"))
+            from cache import db_cache
+            cache_key = "search_degrade:" + json.dumps({k: query.get(k) for k in ("keywords", "city", "limit")}, ensure_ascii=False, sort_keys=True)
+            try:
+                results=search_jobs(query,s)
+            except Exception as exc:
+                # 源故障降级：读上次成功缓存
+                stale = db_cache.get(cache_key)
+                if stale is not None:
+                    try:
+                        cached_results = json.loads(stale)
+                        self._send(200, {"ok": True, "data": mark_saved_search_results(cached_results), "local_results": [], "mode": "degraded", "degraded": True, "stale": True, "hint": "外部数据源暂时不可用，已返回上次搜索结果。"})
+                        return
+                    except Exception:
+                        pass
+                self._send(502, {"ok": False, "error": "搜索服务暂时不可用：" + str(exc)[:120]})
+                return
+            db_cache.set(cache_key, json.dumps(results, ensure_ascii=False), ttl_seconds=3600)
             if not enabled: self._send(200,{"ok":True,"data":[],"local_results":mark_saved_search_results(results),"mode":"local","hint":"请在设置中开启 AI 模式以使用联网搜索"}); return
             profile=normalize_profile(_safe_json(user.get("profile_json"), {})); output=[]
             for item in results:

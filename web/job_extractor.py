@@ -102,7 +102,9 @@ def _public_ats_job_from_url(url):
         endpoint = f"https://api.ashbyhq.com/posting-api/job-board/{urllib.parse.quote(board)}/{urllib.parse.quote(job_id)}"
     req = urllib.request.Request(endpoint, headers={"Accept": "application/json", "User-Agent": "CareerPilot/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp: data = json.loads(resp.read().decode("utf-8"))
+        from http_client import get_json
+        timeout = int(os.environ.get("ATS_TIMEOUT", "15"))
+        data = get_json(endpoint, headers={"Accept": "application/json"}, timeout=timeout, retries=1, source="ats")
     except Exception:
         return None
     description = data.get("content") or data.get("description") or data.get("job_description") or data.get("descriptionHtml") or ""
@@ -162,18 +164,17 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def fetch_url_text(url):
     validate_public_url(url)
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-            ),
-            "Accept-Language": "zh-CN,zh;q=0.9",
-        },
-    )
-    with urllib.request.build_opener(_SafeRedirectHandler()).open(req, timeout=30) as resp:
-        raw = resp.read(2 * 1024 * 1024)
+    from http_client import fetch_text
+    timeout = int(os.environ.get("WEB_TIMEOUT", "30"))
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+        ),
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    }
+    raw = fetch_text(url, headers=headers, timeout=timeout, retries=1, source="web",
+                     opener=urllib.request.build_opener(_SafeRedirectHandler()), raw_bytes=True)
     for encoding in ("utf-8", "gbk", "gb18030"):
         try:
             html_text = raw.decode(encoding)
@@ -403,9 +404,9 @@ def search_freehire_jobs(query: dict, limit=20) -> list[dict]:
         pass
     url = os.environ.get("FREEHIRE_API_URL", _FREEHIRE_API_URL) + "?" + urllib.parse.urlencode(params)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "CareerPilot/1.0", "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
+        from http_client import get_json
+        timeout = int(os.environ.get("FREEHIRE_TIMEOUT", "12"))
+        payload = get_json(url, headers={"Accept": "application/json"}, timeout=timeout, retries=1, source="freehire")
         rows = payload.get("data") or payload.get("results") or []
         results = []
         for row in rows[:limit]:
