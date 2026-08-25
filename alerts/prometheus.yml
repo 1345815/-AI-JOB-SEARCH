@@ -1,0 +1,34 @@
+groups:
+  - name: careerpilot
+    rules:
+      - alert: ErrorRateHigh
+        expr: |
+          sum(rate(careerpilot_errors_5xx_total[5m]))
+          / sum(rate(careerpilot_http_requests_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "5xx 错误率超过 1%"
+          description: "最近 5 分钟 5xx 占比 {{ $value | humanizePercentage }}"
+
+      - alert: LatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(careerpilot_http_duration_seconds_bucket[10m])) by (le)
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 延迟超过 2s"
+          description: "P95 延迟 {{ $value }}s"
+
+      - alert: UptimeDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "服务不可用"
+          description: "CareerPilot 进程已停止响应"

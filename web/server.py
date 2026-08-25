@@ -2005,6 +2005,15 @@ class Handler(BaseHTTPRequestHandler):
         if os.environ.get("CAREERPILOT_QUIET") != "1":
             super().log_message(fmt, *args)
 
+    def _request_meta(self):
+        """请求级元数据：request_id + 计时起点。"""
+        if not hasattr(self, "_start_ns"):
+            rid = self.headers.get("X-Request-Id") or secrets.token_hex(6)
+            self._request_id = rid
+            self._start_ns = time.perf_counter_ns()
+            self._user_id = None
+        return self._request_id
+
     def _send(self, code, body, content_type="application/json; charset=utf-8", extra=None, set_cookie=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -2026,6 +2035,27 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+        self._record_access(code)
+
+    def _record_access(self, code):
+        """请求结束：记录指标与结构化日志。"""
+        try:
+            start = getattr(self, "_start_ns", None)
+            if start is None:
+                return
+            duration_ms = (time.perf_counter_ns() - start) / 1e6
+            path = urllib.parse.urlparse(self.path).path
+            from observability import record_request
+            record_request(
+                self.command or "GET",
+                path,
+                code,
+                duration_ms,
+                request_id=getattr(self, "_request_id", None),
+                user_id=getattr(self, "_user_id", None),
+            )
+        except Exception:
+            pass
 
     def _json_body(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -2351,7 +2381,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _current_user(self):
         token=self._session_token(); user=get_user_by_token(token)
-        if user: self._session_expires_at=touch_session(token)
+        if user:
+            self._session_expires_at=touch_session(token)
+            self._user_id = user["id"]
         return user
 
     def _session_cookie(self, token, remember=True):
@@ -3197,8 +3229,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"ok": False, "error": "not found"})
 
     def do_GET(self):
+        self._request_meta()
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        if path == "/healthz":
+            self._send(200, {"status": "ok", "time": time.strftime("%Y-%m-%d %H:%M:%S")})
+            return
+        if path == "/metrics":
+            from observability import text_format_metrics
+            self._send(200, text_format_metrics(), content_type="text/plain; version=0.0.4")
+            return
         if path.startswith("/api/"):
             parts = path[len("/api/"):].strip("/").split("/")
             self._api("GET", parts)
