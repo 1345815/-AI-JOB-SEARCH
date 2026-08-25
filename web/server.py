@@ -429,6 +429,25 @@ def init_db():
                 detail TEXT DEFAULT '',
                 created_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS teams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                invite_code TEXT UNIQUE NOT NULL,
+                owner_user_id INTEGER NOT NULL,
+                created_at TEXT DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS team_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                role TEXT DEFAULT 'member',
+                joined_at TEXT DEFAULT (datetime('now','localtime')),
+                UNIQUE(team_id, user_id),
+                FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id);
             """
         )
         conn.commit()
@@ -1441,6 +1460,125 @@ def delete_user_data(user_id):
             conn.close()
 
 
+# ---------------------------------------------------------------- 团队与协作
+
+def generate_invite_code():
+    return secrets.token_hex(4).upper()
+
+
+def create_team(owner_user_id, name):
+    code = generate_invite_code()
+    with _DB_LOCK:
+        conn = db()
+        cur = conn.execute(
+            "INSERT INTO teams (name, invite_code, owner_user_id) VALUES (?,?,?)",
+            (name[:80], code, owner_user_id),
+        )
+        team_id = cur.lastrowid
+        conn.execute(
+            "INSERT INTO team_members (team_id, user_id, role) VALUES (?,?,?)",
+            (team_id, owner_user_id, "owner"),
+        )
+        conn.commit()
+        conn.close()
+    return get_team(team_id)
+
+
+def get_team(team_id):
+    with _DB_LOCK:
+        conn = db()
+        row = conn.execute("SELECT * FROM teams WHERE id=?", (team_id,)).fetchone()
+        conn.close()
+    return dict(row) if row else None
+
+
+def get_team_by_code(invite_code):
+    with _DB_LOCK:
+        conn = db()
+        row = conn.execute("SELECT * FROM teams WHERE invite_code=?", (invite_code,)).fetchone()
+        conn.close()
+    return dict(row) if row else None
+
+
+def team_member_count(team_id):
+    with _DB_LOCK:
+        conn = db()
+        n = conn.execute("SELECT COUNT(*) AS n FROM team_members WHERE team_id=?", (team_id,)).fetchone()["n"]
+        conn.close()
+    return n
+
+
+def is_team_member(team_id, user_id):
+    with _DB_LOCK:
+        conn = db()
+        row = conn.execute(
+            "SELECT 1 FROM team_members WHERE team_id=? AND user_id=?",
+            (team_id, user_id),
+        ).fetchone()
+        conn.close()
+    return row is not None
+
+
+def list_my_teams(user_id):
+    with _DB_LOCK:
+        conn = db()
+        rows = conn.execute(
+            """SELECT t.id, t.name, t.invite_code, t.owner_user_id, t.created_at, m.role AS my_role
+               FROM teams t JOIN team_members m ON m.team_id=t.id
+               WHERE m.user_id=? ORDER BY t.id DESC""",
+            (user_id,),
+        ).fetchall()
+        conn.close()
+    teams = [dict(r) for r in rows]
+    for t in teams:
+        t["member_count"] = team_member_count(t["id"])
+    return teams
+
+
+def list_team_members(team_id):
+    with _DB_LOCK:
+        conn = db()
+        rows = conn.execute(
+            """SELECT u.id, u.username, u.email, m.role, m.joined_at
+               FROM team_members m JOIN users u ON u.id=m.user_id
+               WHERE m.team_id=? ORDER BY m.id""",
+            (team_id,),
+        ).fetchall()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def join_team(user_id, invite_code):
+    team = get_team_by_code((invite_code or "").strip().upper())
+    if not team:
+        return None, "邀请码无效"
+    if is_team_member(team["id"], user_id):
+        return None, "已在团队中"
+    with _DB_LOCK:
+        conn = db()
+        conn.execute(
+            "INSERT INTO team_members (team_id, user_id, role) VALUES (?,?,'member')",
+            (team["id"], user_id),
+        )
+        conn.commit()
+        conn.close()
+    return team, None
+
+
+def leave_team(user_id, team_id):
+    team = get_team(team_id)
+    if not team:
+        return False, "团队不存在"
+    if team["owner_user_id"] == user_id:
+        return False, "创建者不可退出团队"
+    with _DB_LOCK:
+        conn = db()
+        conn.execute("DELETE FROM team_members WHERE team_id=? AND user_id=?", (team_id, user_id))
+        conn.commit()
+        conn.close()
+    return True, None
+
+
 def notify_deadline_if_needed(user_id, job):
     """岗位 deadline 距今 <=3 天时生成「即将截止」通知（同一 job 只生成一次）。"""
     if not job:
@@ -2345,6 +2483,44 @@ class Handler(BaseHTTPRequestHandler):
 
         if head == "funnel" and method == "GET":
             self._send(200, {"ok": True, "funnel": funnel_stats(user["id"])})
+            return
+
+        if head == "teams" and method == "POST":
+            body = self._json_body() or {}
+            name = (body.get("name") or "").strip()
+            if not name:
+                self._send(400, {"ok": False, "error": "团队名称不能为空"})
+                return
+            team = create_team(user["id"], name)
+            self._send(200, {"ok": True, "team": team})
+            return
+
+        if head == "teams" and method == "GET":
+            self._send(200, {"ok": True, "teams": list_my_teams(user["id"])})
+            return
+
+        if head == "teams" and len(parts) >= 2 and parts[1] == "join" and method == "POST":
+            body = self._json_body() or {}
+            team, err = join_team(user["id"], body.get("invite_code") or "")
+            if err:
+                self._send(404 if err == "邀请码无效" else 400, {"ok": False, "error": err})
+                return
+            self._send(200, {"ok": True, "team": team})
+            return
+
+        if head == "teams" and len(parts) >= 3 and parts[2] == "members" and method == "GET":
+            if not is_team_member(parts[1], user["id"]):
+                self._send(403, {"ok": False, "error": "非团队成员无权查看"})
+                return
+            self._send(200, {"ok": True, "members": list_team_members(parts[1])})
+            return
+
+        if head == "teams" and len(parts) >= 3 and parts[2] == "leave" and method == "POST":
+            ok, err = leave_team(user["id"], parts[1])
+            if not ok:
+                self._send(400, {"ok": False, "error": err})
+                return
+            self._send(200, {"ok": True})
             return
 
         if head == "export" and method == "GET":

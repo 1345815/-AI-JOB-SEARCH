@@ -1428,6 +1428,104 @@
     }).catch(function (err) { toast(err.message, "error"); });
   }
 
+  /* ---------------- 团队协作 ---------------- */
+
+  function renderTeam() {
+    el("content").innerHTML =
+      '<div class="content-inner">' +
+      '<div class="page-head"><div><h1>团队协作</h1><p>创建团队、通过邀请码加入，和同学/同事一起协作求职。</p></div></div>' +
+      '<div class="panel mb-14"><div class="panel-head"><strong>创建或加入团队</strong><span class="sub">创建后自动成为创建者；加入需要邀请码</span></div>' +
+      '<div class="panel-body"><div class="flex" style="gap:8px;flex-wrap:wrap">' +
+      '<input id="teamName" type="text" placeholder="团队名称，如：内推小分队" style="flex:1;min-width:180px;min-height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:6px">' +
+      '<button class="btn btn-primary" id="createTeamBtn">创建团队</button>' +
+      '<input id="teamCode" type="text" placeholder="输入邀请码" style="width:140px;min-height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:6px">' +
+      '<button class="btn" id="joinTeamBtn">加入团队</button>' +
+      "</div></div></div>" +
+      '<div id="teamList"></div>' +
+      "</div>";
+    loadMyTeams();
+    el("createTeamBtn").addEventListener("click", function () {
+      var name = el("teamName").value.trim();
+      if (!name) { toast("请输入团队名称", "warn"); return; }
+      api("teams", { method: "POST", body: { name: name } }).then(function (res) {
+        toast("团队已创建", "success");
+        el("teamName").value = "";
+        loadMyTeams();
+      }).catch(function (err) { toast(err.message, "error"); });
+    });
+    el("joinTeamBtn").addEventListener("click", function () {
+      var code = el("teamCode").value.trim();
+      if (!code) { toast("请输入邀请码", "warn"); return; }
+      api("teams/join", { method: "POST", body: { invite_code: code } }).then(function () {
+        toast("已加入团队", "success");
+        el("teamCode").value = "";
+        loadMyTeams();
+      }).catch(function (err) { toast(err.message, "error"); });
+    });
+  }
+
+  function loadMyTeams() {
+    api("teams").then(function (res) {
+      var teams = res.teams || [];
+      var host = el("teamList");
+      if (!host) return;
+      if (!teams.length) {
+        host.innerHTML = '<div class="panel"><div class="panel-body"><div class="empty"><strong>还没有团队</strong><span>创建一个团队，或向同学索取邀请码加入。</span></div></div></div>';
+        return;
+      }
+      host.innerHTML = teams.map(function (t) {
+        return (
+          '<div class="panel mb-14"><div class="panel-head"><strong>' + esc(t.name) + '</strong>' +
+          '<span class="sub">' + (t.my_role === "owner" ? "创建者" : "成员") + " · " + t.member_count + " 人</span></div>" +
+          '<div class="panel-body">' +
+          '<div class="flex" style="gap:8px;align-items:center;margin-bottom:10px">' +
+          '<span class="muted text-sm">邀请码</span><code class="invite-code">' + esc(t.invite_code) + "</code>" +
+          '<button class="btn btn-sm" data-copy-code="' + esc(t.invite_code) + '">复制</button>' +
+          (t.my_role === "owner" ? "" : '<button class="btn btn-sm" data-leave-team="' + t.id + '" style="color:var(--danger)">退出</button>') +
+          "</div>" +
+          '<div data-team-members="' + t.id + '"></div>' +
+          "</div></div>"
+        );
+      }).join("");
+      document.querySelectorAll("[data-copy-code]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var code = btn.getAttribute("data-copy-code");
+          var ta = document.createElement("textarea");
+          ta.value = code; document.body.appendChild(ta); ta.select();
+          document.execCommand("copy"); ta.remove();
+          toast("邀请码已复制：" + code, "success");
+        });
+      });
+      document.querySelectorAll("[data-leave-team]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var id = btn.getAttribute("data-leave-team");
+          if (!confirm("确定退出该团队吗？")) return;
+          api("teams/" + id + "/leave", { method: "POST" }).then(function () {
+            toast("已退出团队", "success");
+            loadMyTeams();
+          }).catch(function (err) { toast(err.message, "error"); });
+        });
+      });
+      teams.forEach(function (t) {
+        loadTeamMembers(t.id);
+      });
+    }).catch(function (err) { toast("加载团队失败：" + err.message, "error"); });
+  }
+
+  function loadTeamMembers(teamId) {
+    api("teams/" + teamId + "/members").then(function (res) {
+      var host = document.querySelector('[data-team-members="' + teamId + '"]');
+      if (!host) return;
+      var members = res.members || [];
+      host.innerHTML = '<div class="team-members">' + members.map(function (m) {
+        return '<div class="list-row"><div class="row-main"><div class="row-title">' + esc(m.username) +
+          (m.role === "owner" ? ' <span class="tag tag-accent">创建者</span>' : "") + "</div>" +
+          '<div class="row-sub">' + esc(m.email || "无邮箱") + "</div></div>" +
+          '<span class="muted text-sm">' + esc((m.joined_at || "").slice(0, 10)) + "</span></div>";
+      }).join("") + "</div>";
+    }).catch(function () {});
+  }
+
   function renderProfile() {
     var p = state.profile || {};
     var skills = p.skills || {};
@@ -2156,7 +2254,8 @@
     pipeline: "申请进度",
     interview: "面试准备",
     profile: "简历库",
-    admin: "运营管理"
+    admin: "运营管理",
+    team: "团队协作"
   };
 
   function route() {
@@ -2174,6 +2273,7 @@
     else if (state.view === "interview") renderInterview();
     else if (state.view === "profile") renderProfile();
     else if (state.view === "admin") renderAdmin();
+    else if (state.view === "team") renderTeam();
   }
 
   function openSidebar() { el("sidebar").classList.add("open"); el("sidebarScrim").classList.remove("hide"); }
