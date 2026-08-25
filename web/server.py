@@ -495,6 +495,14 @@ def init_db():
                 )
             conn.commit()
         conn.close()
+        # 启动时自动应用未执行的版本化迁移（老库平滑升级，不丢数据）。
+        try:
+            from migrations import migrate
+            _conn = db()
+            migrate(_conn)
+            _conn.close()
+        except Exception as exc:
+            print("迁移执行失败（已跳过，请人工检查）：%s" % exc)
 
 
 # ---------------------------------------------------------------- 密码与会话
