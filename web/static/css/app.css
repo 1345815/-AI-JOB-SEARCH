@@ -932,3 +932,8 @@ body { background: radial-gradient(circle at 85% -10%, rgba(14,143,123,.08), tra
 .notif-title { font-size: 13px; font-weight: 500; color: var(--text); }
 .notif-body { font-size: 12px; color: var(--text-2); margin-top: 2px; }
 .notif-meta { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+
+/* ---- 隐私与数据 ---- */
+.privacy-block { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.privacy-block strong { font-size: 13px; color: var(--text); display: block; margin-bottom: 4px; }
+.privacy-block p { font-size: 12px; margin-bottom: 10px; }

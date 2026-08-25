@@ -421,6 +421,14 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read);
+            CREATE TABLE IF NOT EXISTS admin_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_user_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target_user_id INTEGER,
+                detail TEXT DEFAULT '',
+                created_at REAL NOT NULL
+            );
             """
         )
         conn.commit()
@@ -1344,6 +1352,95 @@ def unread_count(user_id):
     return n
 
 
+# ---------------------------------------------------------------- 数据主权与合规
+
+def record_admin_action(admin_user_id, action, target_user_id=None, detail=""):
+    """管理员操作审计留痕。失败静默。"""
+    try:
+        with _DB_LOCK:
+            conn = db()
+            conn.execute(
+                "INSERT INTO admin_actions (admin_user_id, action, target_user_id, detail, created_at) VALUES (?,?,?,?,?)",
+                (admin_user_id, action, target_user_id, str(detail)[:500], time.time()),
+            )
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
+
+
+def export_user_data(user_id):
+    """打包用户全部数据为 dict。绝不含 password_hash / api_key；简历只导出元信息。"""
+    with _DB_LOCK:
+        conn = db()
+        user_row = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user_row:
+            conn.close()
+            return None
+        user = dict(user_row)
+        user.pop("password_hash", None)
+        profile = _safe_json(user.get("profile_json"), {})
+        jobs = [dict(r) for r in conn.execute(
+            "SELECT id, title, company, city, posting_type, work_type, experience, tags, salary, deadline, source, url, description, requirements, created_at, is_demo FROM jobs"
+            " WHERE id IN (SELECT DISTINCT job_id FROM applications WHERE user_id=?)", (user_id,)).fetchall()]
+        applications = [dict(r) for r in conn.execute(
+            "SELECT * FROM applications WHERE user_id=? ORDER BY updated_at DESC", (user_id,)).fetchall()]
+        evaluations = [dict(r) for r in conn.execute(
+            "SELECT * FROM evaluations WHERE user_id=? ORDER BY created_at DESC", (user_id,)).fetchall()]
+        resumes = [dict(r) for r in conn.execute(
+            "SELECT id, filename, stored_name, size, created_at FROM resumes WHERE user_id=?", (user_id,)).fetchall()]
+        chat_messages = [dict(r) for r in conn.execute(
+            "SELECT role, content, created_at FROM chat_messages WHERE user_id=? ORDER BY id", (user_id,)).fetchall()]
+        documents = [dict(r) for r in conn.execute(
+            "SELECT * FROM documents WHERE user_id=?", (user_id,)).fetchall()]
+        interview_preps = [dict(r) for r in conn.execute(
+            "SELECT * FROM interview_preps WHERE user_id=?", (user_id,)).fetchall()]
+        help_records = [dict(r) for r in conn.execute(
+            "SELECT * FROM help_records WHERE user_id=? ORDER BY id", (user_id,)).fetchall()]
+        events = [dict(r) for r in conn.execute(
+            "SELECT event_type, payload, created_at FROM events WHERE user_id=? ORDER BY id", (user_id,)).fetchall()]
+        notifications = [dict(r) for r in conn.execute(
+            "SELECT type, title, body, link, read, created_at FROM notifications WHERE user_id=? ORDER BY id", (user_id,)).fetchall()]
+        conn.close()
+    return {
+        "user": user,
+        "profile": profile,
+        "jobs": jobs,
+        "applications": applications,
+        "evaluations": evaluations,
+        "resumes": resumes,
+        "chat_messages": chat_messages,
+        "documents": documents,
+        "interview_preps": interview_preps,
+        "help_records": help_records,
+        "events": events,
+        "notifications": notifications,
+        "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def delete_user_data(user_id):
+    """硬删除用户全部关联数据与账号本身。事务保证原子性。"""
+    with _DB_LOCK:
+        conn = db()
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM task_runs WHERE task_id IN (SELECT id FROM tasks WHERE user_id=?)", (user_id,))
+            for table in (
+                "sessions", "evaluations", "applications", "documents", "interview_preps",
+                "chat_messages", "resume_import_drafts", "resumes", "help_records",
+                "tasks", "events", "notifications",
+            ):
+                conn.execute("DELETE FROM %s WHERE user_id=?" % table, (user_id,))
+            conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
 def notify_deadline_if_needed(user_id, job):
     """岗位 deadline 距今 <=3 天时生成「即将截止」通知（同一 job 只生成一次）。"""
     if not job:
@@ -2240,6 +2337,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._send(400, {"ok": False, "error": "未知操作"})
                     return
+                record_admin_action(user["id"], action, int(target_id), "target=%s" % target.get("username"))
                 self._send(200, {"ok": True})
                 return
             self._send(404, {"ok": False, "error": "not found"})
@@ -2247,6 +2345,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if head == "funnel" and method == "GET":
             self._send(200, {"ok": True, "funnel": funnel_stats(user["id"])})
+            return
+
+        if head == "export" and method == "GET":
+            data = export_user_data(user["id"])
+            if data is None:
+                self._send(404, {"ok": False, "error": "用户不存在"})
+                return
+            self._send(200, {"ok": True, "data": data})
             return
 
         if head == "today-tasks" and method == "GET":
@@ -2846,6 +2952,26 @@ class Handler(BaseHTTPRequestHandler):
             with _DB_LOCK:
                 conn=db(); conn.execute("DELETE FROM sessions WHERE user_id=?",(user["id"],)); conn.commit(); conn.close()
             self._send(200,{"ok":True},set_cookie=self._clear_cookie()); return
+
+        if action == "delete-account" and method == "POST":
+            user = self._current_user()
+            if not user:
+                self._send(401, {"ok": False, "error": "未登录"})
+                return
+            if user.get("role") == "admin":
+                self._send(403, {"ok": False, "error": "管理员账号不可注销，请先转移权限"})
+                return
+            body = self._json_body()
+            if not (body or {}).get("confirm"):
+                self._send(400, {"ok": False, "error": "请确认注销（confirm: true）"})
+                return
+            try:
+                delete_user_data(user["id"])
+            except Exception as exc:
+                self._send(500, {"ok": False, "error": "注销失败：" + str(exc)[:160]})
+                return
+            self._send(200, {"ok": True}, set_cookie=self._clear_cookie())
+            return
 
         if action == "guest" and method == "POST":
             guest_id = create_guest_user()

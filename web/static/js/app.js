@@ -398,6 +398,40 @@
     }).catch(function () {});
   }
 
+  /* ---------------- 数据主权 ---------------- */
+
+  async function exportMyData() {
+    var btn = el("exportMyData");
+    btn.disabled = true; btn.textContent = "导出中…";
+    try {
+      var res = await api("export");
+      var blob = new Blob([JSON.stringify(res.data, null, 2)], { type: "application/json" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "careerpilot-data-" + new Date().toISOString().slice(0, 10) + ".json";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+      toast("数据已导出", "success");
+    } catch (e) { toast("导出失败：" + e.message, "error"); }
+    finally { btn.disabled = false; btn.textContent = "导出我的数据"; }
+  }
+
+  async function deleteMyAccount() {
+    if (!confirm("确定要注销账号吗？\n\n你的简历、档案、申请记录、聊天记录将被永久删除，无法恢复。")) return;
+    var again = prompt("请输入你的用户名以确认注销：");
+    if (!again) return;
+    if (again !== state.user.username) { toast("用户名不匹配，已取消", "warn"); return; }
+    var btn = el("deleteMyAccount");
+    btn.disabled = true;
+    try {
+      await api("auth/delete-account", { method: "POST", body: { confirm: true } });
+      toast("账号已注销，数据已删除", "success");
+      setTimeout(function () { location.reload(); }, 800);
+    } catch (e) { toast("注销失败：" + e.message, "error"); }
+    finally { btn.disabled = false; }
+  }
+
   function funnelChart() {
     var f = state_funnel || {};
     var steps = [
@@ -2179,6 +2213,8 @@
     el("chatInput").addEventListener("keydown", function (e) { if (e.key === "Enter") sendChat(el("chatInput").value); });
     el("chatSuggestions").addEventListener("click", function (e) { if (e.target.tagName === "BUTTON") sendChat(e.target.textContent); });
     el("settingsToggle").addEventListener("click", openSettings);
+    el("exportMyData").addEventListener("click", exportMyData);
+    el("deleteMyAccount").addEventListener("click", deleteMyAccount);
     el("saveSettings").addEventListener("click", saveSettings);
     el("testSettings").addEventListener("click", async function () {
       var button = el("testSettings");

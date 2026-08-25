@@ -47,6 +47,7 @@
       <div class="auth-divider"><span>或</span></div>
       <button class="btn btn-block" id="guestBtn">先体验一下，不注册</button>
       <p class="auth-hint muted">游客也可以使用全部功能，之后可一键转正保留数据。</p>
+      <p class="auth-hint muted" style="margin-top:6px">数据仅存储在本服务器，可随时在设置中导出或注销账号。</p>
     </div>
   </div>
 
@@ -200,6 +201,14 @@
           <label class="field"><span>API Key</span><input id="llmKey" type="password" placeholder="sk-..."></label>
           <label class="field"><span>模型名称</span><div class="flex" style="gap:8px"><input id="llmModel" list="llmModelOptions" type="text" placeholder="deepseek-chat" style="flex:1"><button class="btn btn-sm" id="detectModels" type="button">自动识别模型</button></div><datalist id="llmModelOptions"></datalist></label>
           <div id="llmTestStatus" class="muted" role="status" aria-live="polite">尚未测试连接。保存后建议先测试一次。</div>
+          <div class="privacy-block">
+            <strong>隐私与数据</strong>
+            <p class="muted">你的简历、档案、岗位与对话只保存在本服务器。可随时导出全部数据，或注销账号彻底删除。</p>
+            <div class="flex" style="gap:8px">
+              <button class="btn btn-sm" id="exportMyData" type="button">导出我的数据</button>
+              <button class="btn btn-sm" id="deleteMyAccount" type="button" style="color:var(--danger)">注销账号</button>
+            </div>
+          </div>
           <div class="modal-actions">
             <button class="btn" data-close="settingsModal">取消</button>
             <button class="btn" id="testSettings">测试 AI 连接</button>
