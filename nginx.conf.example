@@ -46,5 +46,16 @@ server {
         proxy_set_header Connection "";
         proxy_read_timeout 60s;
         proxy_send_timeout 60s;
+        # 被动摘除：故障 worker 自动跳过（开源 nginx 支持）
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_next_upstream_tries 3;
     }
 }
+
+# 主动健康检查（需 nginx plus 或 openresty，开源版请忽略此段）
+# upstream careerpilot_backend {
+#     server 127.0.0.1:8001;
+#     server 127.0.0.1:8002;
+#     server 127.0.0.1:8003;
+#     health_check interval=5s fails=3 passes=2 uri=/healthz;
+# }
