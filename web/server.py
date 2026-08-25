@@ -527,28 +527,65 @@ def verify_password(password, stored):
         return False
 
 
+def _rate_key_str(key):
+    return "|".join(str(k) for k in key) if isinstance(key, (tuple, list)) else str(key)
+
+
 def login_rate_status(key, now=None):
     now = now or time.time()
+    k = _rate_key_str(key)
     with _LOGIN_LOCK:
-        attempts = [stamp for stamp in _LOGIN_FAILURES.get(key, []) if now - stamp < LOGIN_RATE_WINDOW_SECONDS]
-        if attempts:
-            _LOGIN_FAILURES[key] = attempts
-        else:
-            _LOGIN_FAILURES.pop(key, None)
+        try:
+            conn = db()
+            row = conn.execute("SELECT timestamps_json FROM login_attempts WHERE key=?", (k,)).fetchone()
+            conn.close()
+        except Exception:
+            row = None
+        if not row:
+            return 0
+        try:
+            attempts = [s for s in json.loads(row["timestamps_json"]) if now - s < LOGIN_RATE_WINDOW_SECONDS]
+        except (ValueError, TypeError):
+            attempts = []
         return max(1, int(LOGIN_RATE_WINDOW_SECONDS - (now - attempts[0]))) if len(attempts) >= LOGIN_RATE_LIMIT else 0
 
 
 def record_login_failure(key, now=None):
     now = now or time.time()
+    k = _rate_key_str(key)
     with _LOGIN_LOCK:
-        attempts = [stamp for stamp in _LOGIN_FAILURES.get(key, []) if now - stamp < LOGIN_RATE_WINDOW_SECONDS]
-        attempts.append(now)
-        _LOGIN_FAILURES[key] = attempts
+        try:
+            conn = db()
+            row = conn.execute("SELECT timestamps_json FROM login_attempts WHERE key=?", (k,)).fetchone()
+            if row:
+                try:
+                    attempts = [s for s in json.loads(row["timestamps_json"]) if now - s < LOGIN_RATE_WINDOW_SECONDS]
+                except (ValueError, TypeError):
+                    attempts = []
+            else:
+                attempts = []
+            attempts.append(now)
+            conn.execute(
+                "INSERT INTO login_attempts (key, timestamps_json, updated_at) VALUES (?,?,?)"
+                " ON CONFLICT(key) DO UPDATE SET timestamps_json=excluded.timestamps_json, updated_at=excluded.updated_at",
+                (k, json.dumps(attempts), now),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
 
 def clear_login_failures(key):
+    k = _rate_key_str(key)
     with _LOGIN_LOCK:
-        _LOGIN_FAILURES.pop(key, None)
+        try:
+            conn = db()
+            conn.execute("DELETE FROM login_attempts WHERE key=?", (k,))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
 
 def create_session(user_id, max_age=None):
@@ -585,12 +622,21 @@ def get_user_by_token(token):
         conn.close()
     return dict(row) if row else None
 
+SESSION_TOUCH_THRESHOLD_SECONDS = int(os.environ.get("SESSION_TOUCH_THRESHOLD_SECONDS", "300"))
+
+
 def touch_session(token):
     if not token: return None
     with _DB_LOCK:
         conn=db(); row=conn.execute("SELECT expires_at FROM sessions WHERE token=?",(token,)).fetchone()
-        if row and time.mktime(time.strptime(row["expires_at"],"%Y-%m-%d %H:%M:%S"))-time.time()<86400:
-            conn.execute("UPDATE sessions SET expires_at=? WHERE token=?",(time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(time.time()+SESSION_MAX_AGE_DAYS*86400)),token)); conn.commit()
+        if row:
+            try:
+                remain = time.mktime(time.strptime(row["expires_at"],"%Y-%m-%d %H:%M:%S")) - time.time()
+            except (ValueError, TypeError):
+                remain = 0
+            # 写放大治理：仅当会话即将过期（剩余 < 阈值）或剩余不足 1 天时才刷新
+            if remain < SESSION_TOUCH_THRESHOLD_SECONDS or (remain < 86400):
+                conn.execute("UPDATE sessions SET expires_at=? WHERE token=?",(time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(time.time()+SESSION_MAX_AGE_DAYS*86400)),token)); conn.commit()
         row=conn.execute("SELECT expires_at FROM sessions WHERE token=?",(token,)).fetchone(); conn.close()
     return row["expires_at"] if row else None
 
@@ -2682,10 +2728,31 @@ class Handler(BaseHTTPRequestHandler):
             if not company: self._send(400,{"ok":False,"error":"缺少公司名"}); return
             if not enabled: self._send(200,{"ok":True,"data":[],"skipped":[],"mode":"local","hint":"请在设置中开启 AI 模式以使用联网搜索"}); return
             city=(body.get("city") or "").strip(); limit=min(max(int(body.get("limit",8)),1),10)
+            from cache import db_cache
+            cache_key = "company_search:" + json.dumps({"company": company, "city": city, "limit": limit}, ensure_ascii=False, sort_keys=True)
+            cached_hit = db_cache.get(cache_key)
+            if cached_hit is not None:
+                try:
+                    result = json.loads(cached_hit)
+                    result["cached"] = True
+                    output = []
+                    profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
+                    for item in result.get("jobs", []):
+                        try:
+                            job = get_job(add_job(item)); ev = score_job(job, profile); save_evaluation(user["id"], ev)
+                            output.append({**job, "evaluation": ev})
+                        except Exception: continue
+                    output = decorate_search_results(output)
+                    record_event(user["id"], "job_searched", {"scope": "company", "company": company[:60]})
+                    self._send(200, {"ok": True, "data": output, "skipped": result.get("skipped", []), "cached": True, "sources": search_source_health(output), "hint": "已从真实招聘页面抓取岗位；结果按信息完整度标记，投递前仍建议人工核实链接。"})
+                    return
+                except Exception:
+                    pass
             try:
                 result=search_company_jobs(company,city,limit)
             except Exception as exc:
                 self._send(500,{"ok":False,"error":"联网搜索失败："+str(exc)[:160]}); return
+            db_cache.set(cache_key, json.dumps(result, ensure_ascii=False), ttl_seconds=3600)
             profile=normalize_profile(_safe_json(user.get("profile_json"), {})); output=[]
             for item in result.get("jobs",[]):
                 try:
@@ -3312,6 +3379,8 @@ def main():
             float(os.environ.get("BACKUP_INTERVAL_HOURS", "24")),
             int(os.environ.get("BACKUP_RETENTION", "14")),
         )
+    from cache import start_cleanup_scheduler
+    start_cleanup_scheduler(float(os.environ.get("CLEANUP_INTERVAL_HOURS", "1")) * 3600)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"CareerPilot Web 已启动：http://{args.host}:{args.port}")
     print("按 Ctrl+C 停止服务。")

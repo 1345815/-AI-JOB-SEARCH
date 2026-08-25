@@ -14,6 +14,12 @@ import server
 
 
 class WebSecurityBackupTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.mkdtemp()
+        server.DB_FILE = Path(cls._tmp) / "test_security.db"
+        server.init_db()
+
     def test_ssrf_rejects_private_and_accepts_public_dns(self):
         private = [(2, 1, 6, "", ("127.0.0.1", 80))]
         with mock.patch.object(job_extractor.socket, "getaddrinfo", return_value=private):

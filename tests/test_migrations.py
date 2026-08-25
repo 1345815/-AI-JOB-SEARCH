@@ -32,27 +32,30 @@ class MigrationTests(unittest.TestCase):
 
     def test_migrate_applies_and_records(self):
         done = migrations.migrate(self.conn)
-        self.assertEqual(done, ["001"])
-        row = self.conn.execute("SELECT * FROM schema_migrations").fetchone()
-        self.assertEqual(row["version"], "001")
+        self.assertEqual(done, ["001", "002"])
+        rows = self.conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+        self.assertEqual([r[0] for r in rows], ["001", "002"])
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(applications)").fetchall()}
         self.assertIn("follow_up_at", cols)
         self.assertIn("contact", cols)
         self.assertIn("attachment_name", cols)
+        tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        self.assertIn("login_attempts", tables)
+        self.assertIn("cache_entries", tables)
 
     def test_migrate_idempotent(self):
         migrations.migrate(self.conn)
         done2 = migrations.migrate(self.conn)
         self.assertEqual(done2, [])  # 第二次不重复应用
         rows = self.conn.execute("SELECT COUNT(*) AS n FROM schema_migrations").fetchone()["n"]
-        self.assertEqual(rows, 1)
+        self.assertEqual(rows, 2)
 
     def test_rollback_removes_version_record(self):
         migrations.migrate(self.conn)
         rolled = migrations.rollback(self.conn, steps=1)
-        self.assertEqual(rolled, ["001"])
+        self.assertEqual(rolled, ["002"])
         rows = self.conn.execute("SELECT COUNT(*) AS n FROM schema_migrations").fetchone()["n"]
-        self.assertEqual(rows, 0)
+        self.assertEqual(rows, 1)
 
     def test_dry_run_does_not_write(self):
         migrations.ensure_version_table(self.conn)
@@ -64,8 +67,8 @@ class MigrationTests(unittest.TestCase):
     def test_status_marks_applied(self):
         migrations.migrate(self.conn)
         status = migrations.status(self.conn)
-        self.assertEqual(len(status), 1)
-        self.assertTrue(status[0][2])  # (version, name, applied)
+        self.assertEqual(len(status), 2)
+        self.assertTrue(all(item[2] for item in status))  # (version, name, applied)
 
 
 if __name__ == "__main__":
