@@ -190,7 +190,11 @@ def load_settings():
         try:
             stored = json.loads(_utf8(SETTINGS_FILE))
             for key in ("provider", "base_url", "api_key", "model", "enabled", "search"):
-                if key in stored:
+                # 环境变量优先：LLM_API_KEY 等已设置时不覆盖
+                if key in stored and not os.environ.get({
+                    "provider": "LLM_PROVIDER", "base_url": "LLM_API_BASE", "api_key": "LLM_API_KEY",
+                    "model": "LLM_MODEL", "enabled": "LLM_ENABLED",
+                }.get(key, "")):
                     settings[key] = stored[key]
         except Exception:
             pass
@@ -1302,6 +1306,71 @@ def funnel_stats(user_id=None):
             ).fetchall()
         conn.close()
     return {row["event_type"]: row["n"] for row in rows}
+
+
+# ---------------------------------------------------------------- 审计日志
+
+def audit(action, resource="", resource_id="", user_id=None, ip="", ua="", meta=None):
+    """写入审计日志。失败静默，不抛异常。meta 中敏感字段（api_key/password/token）被剥离。"""
+    try:
+        meta = _scrub_meta(meta or {})
+        with _DB_LOCK:
+            conn = db()
+            conn.execute(
+                "INSERT INTO audit_log (ts, user_id, action, resource, resource_id, ip, user_agent, meta_json)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (time.time(), user_id, action[:100], resource[:100], str(resource_id)[:100],
+                 str(ip)[:64], str(ua)[:256], json.dumps(meta, ensure_ascii=False)[:2000]),
+            )
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
+
+
+_SENSITIVE_META_KEYS = ("api_key", "apikey", "password", "passwd", "token", "secret", "authorization")
+
+
+def _scrub_meta(meta):
+    if not isinstance(meta, dict):
+        if isinstance(meta, str):
+            low = meta.lower()
+            return "<scrubbed>" if any(s in low for s in _SENSITIVE_META_KEYS) or low.startswith("sk-") else meta
+        return meta
+    out = {}
+    for k, v in meta.items():
+        k_low = k.lower()
+        is_sensitive_key = any(s in k_low for s in _SENSITIVE_META_KEYS)
+        if is_sensitive_key:
+            out[k] = "<scrubbed>"
+        elif isinstance(v, str) and (any(s in v.lower() for s in _SENSITIVE_META_KEYS) or v.lower().startswith("sk-")):
+            out[k] = "<scrubbed>"
+        else:
+            out[k] = v
+    return out
+
+
+def list_audit(limit=100, action=None, user_id=None):
+    with _DB_LOCK:
+        conn = db()
+        sql = "SELECT id, ts, user_id, action, resource, resource_id, ip, user_agent, meta_json FROM audit_log"
+        where, args = [], []
+        if action:
+            where.append("action=?")
+            args.append(action)
+        if user_id is not None:
+            where.append("user_id=?")
+            args.append(user_id)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY ts DESC LIMIT ?"
+        args.append(min(max(limit, 1), 500))
+        rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
+        conn.close()
+    for r in rows:
+        r["ts"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"]))
+        r["meta"] = _safe_json(r.pop("meta_json"), {})
+    return rows
 
 
 # ---------------------------------------------------------------- 留存触达与通知
@@ -2533,6 +2602,14 @@ class Handler(BaseHTTPRequestHandler):
             if sub == "funnel" and method == "GET":
                 self._send(200, {"ok": True, "funnel": funnel_stats()})
                 return
+            if sub == "audit" and method == "GET":
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                limit = int((qs.get("limit") or ["100"])[0])
+                action = (qs.get("action") or [None])[0]
+                rows = list_audit(limit=limit, action=action)
+                audit("audit.view", user_id=user["id"], ip=self.client_address[0])
+                self._send(200, {"ok": True, "data": rows})
+                return
             if sub == "users" and method == "GET":
                 qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 limit = min(max(int(qs.get("limit", ["20"])[0] or 20), 1), 100)
@@ -2674,6 +2751,7 @@ class Handler(BaseHTTPRequestHandler):
             public = dict(settings)
             public.pop("api_key", None)
             public["has_key"] = bool(settings.get("api_key"))
+            audit("settings.update", user_id=user["id"], ip=self.client_address[0], meta={"keys": [k for k in body.keys() if k != "api_key"]})
             self._send(200, public)
             return
         if head == "settings" and len(parts) >= 2 and parts[1] == "test" and method == "POST":
@@ -3207,12 +3285,14 @@ class Handler(BaseHTTPRequestHandler):
                 conn.close()
             if not row or not row["password_hash"] or not verify_password(password, row["password_hash"]):
                 record_login_failure(rate_key)
+                audit("login.failure", user_id=None, ip=self.client_address[0], ua=self.headers.get("User-Agent", ""), meta={"username": username[:64]})
                 self._send(400, {"ok": False, "error": "用户名或密码错误（支持用户名或邮箱，不区分大小写）"})
                 return
             if row.get("disabled"):
                 self._send(403, {"ok": False, "error": "账号已被停用，请联系管理员"})
                 return
             clear_login_failures(rate_key)
+            audit("login.success", user_id=row["id"], ip=self.client_address[0], ua=self.headers.get("User-Agent", ""))
             remember=bool(body.get("remember",True)); token = create_session(row["id"],2592000 if remember else None)
             user = user_public(get_user_by_token(token))
             self._send(200, {"ok": True, "user": user}, set_cookie=self._session_cookie(token,remember))
