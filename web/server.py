@@ -399,6 +399,16 @@ def init_db():
                 FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id);
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT DEFAULT '{}',
+                created_at REAL NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_events_user_time ON events(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
             """
         )
         conn.commit()
@@ -1165,6 +1175,39 @@ def save_evaluation(user_id, ev):
         )
         conn.commit()
         conn.close()
+    record_event(user_id, "job_scored", {"job_id": ev["job_id"], "overall": ev.get("overall")})
+
+
+def record_event(user_id, event_type, payload=None):
+    """记录用户关键行为事件。失败必须静默，不得影响业务主流程。"""
+    try:
+        with _DB_LOCK:
+            conn = db()
+            conn.execute(
+                "INSERT INTO events (user_id, event_type, payload, created_at) VALUES (?,?,?,?)",
+                (user_id, event_type, json.dumps(payload or {}, ensure_ascii=False)[:2000], time.time()),
+            )
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
+
+
+def funnel_stats(user_id=None):
+    """按事件类型统计计数；user_id=None 时统计全局。"""
+    with _DB_LOCK:
+        conn = db()
+        if user_id is not None:
+            rows = conn.execute(
+                "SELECT event_type, COUNT(*) AS n FROM events WHERE user_id=? GROUP BY event_type",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT event_type, COUNT(*) AS n FROM events GROUP BY event_type",
+            ).fetchall()
+        conn.close()
+    return {row["event_type"]: row["n"] for row in rows}
 
 
 def get_evaluation(user_id, job_id):
@@ -2012,6 +2055,9 @@ class Handler(BaseHTTPRequestHandler):
             if sub == "overview" and method == "GET":
                 self._send(200, {"ok": True, "data": admin_overview()})
                 return
+            if sub == "funnel" and method == "GET":
+                self._send(200, {"ok": True, "funnel": funnel_stats()})
+                return
             if sub == "users" and method == "GET":
                 qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 limit = min(max(int(qs.get("limit", ["20"])[0] or 20), 1), 100)
@@ -2044,6 +2090,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True})
                 return
             self._send(404, {"ok": False, "error": "not found"})
+            return
+
+        if head == "funnel" and method == "GET":
+            self._send(200, {"ok": True, "funnel": funnel_stats(user["id"])})
             return
 
         if head == "profile" and len(parts) >= 2 and parts[1] == "resume-import":
@@ -2149,6 +2199,7 @@ class Handler(BaseHTTPRequestHandler):
                     output.append({**job,"evaluation":ev})
                 except Exception: continue
             output = decorate_search_results(output)
+            record_event(user["id"], "job_searched", {"scope": "company", "company": company[:60]})
             self._send(200,{"ok":True,"data":output,"skipped":result.get("skipped",[]),"cached":bool(result.get("cached")),"sources":search_source_health(output),"hint":"已从真实招聘页面抓取岗位；结果按信息完整度标记，投递前仍建议人工核实链接。"}); return
 
         if head=="jobs" and len(parts)==2 and parts[1]=="search" and method=="GET":
@@ -2161,6 +2212,7 @@ class Handler(BaseHTTPRequestHandler):
                 if item.get("source")=="local": continue
                 job=get_job(add_job(item)); ev=score_job(job,profile); save_evaluation(user["id"],ev); output.append({**job,"evaluation":ev})
             decorated = decorate_search_results(output)
+            record_event(user["id"], "job_searched", {"scope": "keywords", "keywords": str((query or {}).get("keywords", ""))[:60]})
             self._send(200,{"ok":True,"data":mark_saved_search_results(decorated),"local_results":mark_saved_search_results([item for item in results if item.get("source")=="local"]),"mode":"llm","sources":search_source_health(results),"hint":"结果已按来源、信息完整度和发布时间标记；AI 建议岗位仍需打开原帖核实。"}); return
 
         if head == "jobs" and len(parts) >= 2 and parts[1] == "parse" and method == "POST":
@@ -2240,6 +2292,7 @@ class Handler(BaseHTTPRequestHandler):
             if task_type in ("resume.generate", "cover_letter.generate", "interview.generate"):
                 payload.setdefault("profile", normalize_profile(_safe_json(user.get("profile_json"), {})))
             task = create_task(user["id"], task_type, payload)
+            record_event(user["id"], "task_submitted", {"task_type": task_type, "task_id": task["id"]})
             self._send(200, {"ok": True, "task": task})
             return
 
@@ -2435,6 +2488,7 @@ class Handler(BaseHTTPRequestHandler):
                     (user["id"], job_id),
                 ).fetchone()
                 conn.close()
+            record_event(user["id"], "job_saved", {"job_id": job_id, "stage": stage})
             self._send(200, dict(row))
             return
 
@@ -2462,6 +2516,12 @@ class Handler(BaseHTTPRequestHandler):
                 conn.commit()
                 row = conn.execute("SELECT * FROM applications WHERE id=? AND user_id=?", (parts[1], user["id"])).fetchone()
                 conn.close()
+            if stage == "面试中":
+                record_event(user["id"], "interview_scheduled", {"application_id": parts[1], "job_id": row["job_id"]})
+            elif stage == "Offer":
+                record_event(user["id"], "offer_received", {"application_id": parts[1], "job_id": row["job_id"]})
+            elif stage == "已投递":
+                record_event(user["id"], "applied", {"application_id": parts[1], "job_id": row["job_id"]})
             self._send(200, dict(row))
             return
 
@@ -2506,6 +2566,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 conn.commit()
                 conn.close()
+            record_event(user["id"], "chat_sent", {"chars": len(user_text)})
             self._send(200, reply)
             return
 

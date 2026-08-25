@@ -292,6 +292,44 @@
     api("daily-recommendations").then(function (res) { state.dailyRecommendations = res.data || []; if (state.view === "dashboard") renderDashboard(); }).catch(function () {});
   }
 
+  var state_funnel = null;
+
+  function loadFunnel() {
+    api("funnel").then(function (res) {
+      state_funnel = res.funnel || {};
+      if (state.view === "dashboard") renderDashboard();
+    }).catch(function () {});
+  }
+
+  function funnelChart() {
+    var f = state_funnel || {};
+    var steps = [
+      { key: "job_scored", label: "已评分岗位", icon: "◎" },
+      { key: "job_saved", label: "已收藏/入库", icon: "☆" },
+      { key: "applied", label: "已投递", icon: "→" },
+      { key: "interview_scheduled", label: "进入面试", icon: "◉" },
+      { key: "offer_received", label: "收到 Offer", icon: "★" }
+    ];
+    var values = steps.map(function (s) { return f[s.key] || 0; });
+    var max = Math.max.apply(null, values.concat([1]));
+    var rows = steps.map(function (s, i) {
+      var v = values[i];
+      var pct = Math.max(8, Math.round((v / max) * 100));
+      var prev = i > 0 ? values[i - 1] : null;
+      var conv = prev ? Math.round((v / Math.max(prev, 1)) * 100) : null;
+      return (
+        '<div class="funnel-row" style="width:' + pct + '%">' +
+        '<span class="funnel-label">' + s.icon + " " + s.label + "</span>" +
+        '<span class="funnel-value">' + v + (conv !== null ? ' <small>(' + conv + "%)</small>" : "") + "</span></div>"
+      );
+    }).join("");
+    var total = values.reduce(function (a, b) { return a + b; }, 0);
+    if (!total) {
+      return '<div class="empty"><strong>还没有转化数据</strong><span>搜索并评分岗位、收藏、投递后，这里会展示你的求职转化漏斗。</span></div>';
+    }
+    return '<div class="funnel">' + rows + "</div>";
+  }
+
   function updateProfileBanner() {
     var empty = !state.profile || !state.profile.name || !state.profile.skills || !state.profile.career_goals;
     el("profileBanner").classList.toggle("hide", !empty);
@@ -398,6 +436,7 @@
       statCard("已投递", applied, "stat-accent", interviewing ? "其中 " + interviewing + " 个面试中" : "等待推进") +
       statCard("Offer", offers, offers ? "stat-warn" : "", upcoming ? upcoming + " 个岗位即将截止" : "加油推进") +
       "</div>" +
+      '<div class="panel mb-14"><div class="panel-head"><strong>求职转化漏斗</strong><span class="sub">从评分到 Offer 的每一步转化</span></div><div class="panel-body">' + funnelChart() + "</div></div>" +
       '<div class="grid-2">' +
       '<div class="panel"><div class="panel-head"><strong>岗位匹配分布</strong><span class="sub">按综合评分分档</span></div><div class="panel-body">' + (jobs.length ? chart : emptyBlock("岗位库为空", "在「岗位搜索」中录入或查看示例岗位")) + "</div></div>" +
       '<div class="panel"><div class="panel-head"><strong>' + (empty ? "热门岗位" : "高匹配岗位") + '</strong><span class="sub">' + (empty ? "最新收录" : "评分前 6 名") + "</span></div><div class=\"panel-body\" style=\"padding:0\">" +
@@ -2075,6 +2114,7 @@
       updateModePill();
       route();
       if (state.profile && state.profile.onboarding_completed) loadDailyRecommendations();
+      loadFunnel();
     } catch (e) {
       el("content").innerHTML = '<div class="content-inner"><div class="panel"><div class="panel-body">' + emptyBlock("加载失败", e.message) + "</div></div></div>";
     }
