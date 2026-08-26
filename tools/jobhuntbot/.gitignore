@@ -1,3 +1,4 @@
 my-materials/
 .DS_Store
 Thumbs.db
+dashboard/*.csv
