@@ -2372,6 +2372,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(413, {"ok": False, "error": "文本超过 3 万字符上限"})
                 return
             plan = self._build_import_plan(user, text)
+            # 同时把粘贴文本存为简历文件，让它在"我的简历"里可管理/删除/下载
+            try:
+                user_dir = RESUME_DIR / str(user["id"])
+                user_dir.mkdir(parents=True, exist_ok=True)
+                stored_name = "paste_%s_%d.txt" % (time.strftime("%Y%m%d_%H%M%S"), user["id"])
+                (user_dir / stored_name).write_text(text, encoding="utf-8")
+                with _DB_LOCK:
+                    conn = db()
+                    cur = conn.execute(
+                        "INSERT INTO resumes (user_id, filename, stored_name, size) VALUES (?,?,?,?)",
+                        (user["id"], "粘贴简历_%s.txt" % time.strftime("%Y-%m-%d"), stored_name, len(text.encode("utf-8"))),
+                    )
+                    conn.commit()
+                    conn.close()
+                plan["resume_id"] = cur.lastrowid
+            except Exception:
+                pass
             self._send(200, {"ok": True, "data": plan})
             return
 
@@ -3343,7 +3360,7 @@ class Handler(BaseHTTPRequestHandler):
                 audit("login.failure", user_id=None, ip=self.client_address[0], ua=self.headers.get("User-Agent", ""), meta={"username": username[:64]})
                 self._send(400, {"ok": False, "error": "用户名或密码错误（支持用户名或邮箱，不区分大小写）"})
                 return
-            if row.get("disabled"):
+            if row["disabled"]:
                 self._send(403, {"ok": False, "error": "账号已被停用，请联系管理员"})
                 return
             clear_login_failures(rate_key)

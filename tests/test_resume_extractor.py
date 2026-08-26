@@ -316,3 +316,56 @@ Python · Prompt 工程 · NLP 文本匹配
     # 技术清单行作为要点而非并入标题
     assert any("SQLite" in p for p in data["projects"][0]["points"])
     assert "SQLite" not in data["projects"][0]["title"]
+
+
+def test_paste_creates_resume_record_and_can_delete(monkeypatch):
+    """粘贴文本识别后：创建简历文件记录（列表可见），且可删除。"""
+    import tempfile
+    import server as server_mod
+    tmp_dir = tempfile.mkdtemp()
+    monkeypatch.setattr(server_mod, "DB_FILE", __import__("pathlib").Path(tmp_dir) / "t.db")
+    monkeypatch.setattr(server_mod, "RESUME_DIR", __import__("pathlib").Path(tmp_dir) / "resumes")
+    server_mod.init_db()
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+
+    with server_mod._DB_LOCK:
+        conn = server_mod.db()
+        cur = conn.execute("INSERT INTO users (username, role, profile_json) VALUES ('u','user','{}')")
+        conn.commit()
+        uid = cur.lastrowid
+        conn.close()
+
+    class Fake(server_mod.Handler):
+        def __init__(self, uid):
+            self.path = "/api/profile/resume-import/text"
+            self.command = "POST"
+            self._sent = None
+            self.client_address = ("127.0.0.1", 0)
+            self.uid = uid
+        def _send(self, code, body, *a, **k):
+            self._sent = (code, body)
+        def _json_body(self):
+            return {"text": "姓名：周八\n邮箱：zb@example.com\n教育背景\n2020.09-2024.06 厦门大学 本科\n专业技能\nPython、SQL\n项目经历\nAI 助手\n使用 Python"}
+        def _current_user(self):
+            with server_mod._DB_LOCK:
+                conn = server_mod.db()
+                row = conn.execute("SELECT * FROM users WHERE id=?", (self.uid,)).fetchone()
+                conn.close()
+            return dict(row) if row else None
+
+    h = Fake(uid)
+    server_mod.Handler._api(h, "POST", ["profile", "resume-import", "text"])
+    assert h._sent[0] == 200
+    resume_id = h._sent[1]["data"].get("resume_id")
+    assert resume_id is not None
+
+    # 列表可见
+    h2 = Fake(uid); h2.path = "/api/resumes"; h2.command = "GET"
+    server_mod.Handler._api(h2, "GET", ["resumes"])
+    rows = h2._sent[1]["data"]
+    assert any(r["id"] == resume_id for r in rows)
+
+    # 可删除
+    h3 = Fake(uid); h3.path = "/api/resumes/%d" % resume_id; h3.command = "DELETE"
+    server_mod.Handler._api(h3, "DELETE", ["resumes", str(resume_id)])
+    assert h3._sent[0] == 200
