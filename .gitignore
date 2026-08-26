@@ -113,3 +113,4 @@ upskill/*.md
 # Brainstorm mockups (superpowers visual companion) - never ship
 .superpowers/
 push_log.txt
+tools/jobhuntbot/my-materials/
