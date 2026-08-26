@@ -427,3 +427,23 @@ AI 助手
     assert len(data["projects"]) == 1
     assert data["projects"][0]["title"] == "AI 助手"
     assert not any("责任心" in p for p in data["projects"][0].get("points", []))
+
+
+def test_ai_http_503_falls_back_to_local(monkeypatch):
+    """AI 通道抛 HTTPError 503（生产真实故障）→ 降级本地规则，不抛异常。"""
+    import urllib.error
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: True)
+    calls = {"n": 0}
+
+    def fail(system, user):
+        calls["n"] += 1
+        raise urllib.error.HTTPError("http://llm", 503, "Service Unavailable", {}, None)
+
+    monkeypatch.setattr(resume_extractor, "request_json", fail)
+    text = "姓名：王五\n邮箱：w@example.com\n求职方向：AI 应用实习生\n"
+    result = resume_extractor.extract_profile_from_resume(text, 1)
+    assert calls["n"] == 2
+    assert result["fallback"] is True
+    assert "503" in result.get("fallback_reason", "")
+    assert result["extracted"]["name"] == "王五"
+    assert result["extracted"]["email"] == "w@example.com"

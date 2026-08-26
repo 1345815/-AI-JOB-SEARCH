@@ -390,7 +390,8 @@ def extract_profile_from_resume(text, user_id):
                 }
                 unrecognized = raw.get("unrecognized", []) if isinstance(raw.get("unrecognized"), list) else []
                 return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": sources, "summary": _summary(extracted), "fallback": False}
-            except RuntimeError as exc:
+            except Exception as exc:
+                # 捕获所有异常（HTTPError/URLError/超时/解析失败等），确保 AI 失败必降级本地规则
                 last_error = exc
         # AI 通道不可用：降级到本地规则，而不是把错误抛给用户
         extracted, confidence, unrecognized, sources = _local_extract(text)

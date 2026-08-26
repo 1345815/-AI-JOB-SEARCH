@@ -270,7 +270,8 @@ def extract_job_from_url(url):
             raw = request_json(system, user)
             if isinstance(raw, dict):
                 return _normalize_extracted_job(raw, text, url)
-        except RuntimeError:
+        except Exception:
+            # AI 通道任何失败（HTTPError/超时/解析失败）都降级本地规则，不把错误抛给用户
             pass
 
     return _normalize_extracted_job(_local_extract(text), text, url)

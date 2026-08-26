@@ -2349,7 +2349,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, "data": plan})
             except ValueError as exc:
                 self._send(400, {"ok": False, "error": str(exc)})
-            except RuntimeError as exc:
+            except Exception as exc:
                 self._send(502, {"ok": False, "error": "简历解析失败：" + str(exc)})
             finally:
                 try:
@@ -2458,7 +2458,7 @@ class Handler(BaseHTTPRequestHandler):
                     saved = True
                 except ValueError as exc:
                     errors.append({"filename": filename, "error": str(exc)})
-                except RuntimeError as exc:
+                except Exception as exc:
                     errors.append({"filename": filename, "error": "简历解析失败：" + str(exc)})
                 finally:
                     if not saved:
