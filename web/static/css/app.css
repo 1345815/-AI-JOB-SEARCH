@@ -947,3 +947,11 @@ body { background: radial-gradient(circle at 85% -10%, rgba(14,143,123,.08), tra
 .resume-missing-guide strong { color: var(--text); }
 .resume-missing-guide.ok { border-color: var(--success); background: color-mix(in srgb, var(--success) 8%, transparent); }
 .resume-missing-guide .btn { padding: 2px 10px; font-size: 12px; }
+
+/* AI 设置状态横幅 */
+.ai-status-banner { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 8px; margin: 10px 0; font-size: 13px; line-height: 1.5; }
+.ai-status-banner strong { font-size: 13.5px; }
+.ai-status-banner.ok { background: var(--success-soft, #e7f6ec); color: var(--success, #1a7f37); border: 1px solid var(--success-border, #b6e3c0); }
+.ai-status-banner.warn { background: var(--warning-soft, #fff8e6); color: var(--warning, #9a6b00); border: 1px solid var(--warning-border, #f0d78a); }
+.ai-status-banner.off { background: #f3f4f6; color: #6b7280; border: 1px solid #e5e7eb; }
+.text-success { color: var(--success, #1a7f37); }

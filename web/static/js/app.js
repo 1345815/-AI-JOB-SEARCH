@@ -2166,10 +2166,41 @@
         state.settings = s;
         el("llmEnabled").checked = !!s.enabled;
         el("llmBase").value = s.base_url || "";
-        el("llmKey").value = s.has_key ? "******" : "";
+        // Key 框不再填 ******（误导），改为留空 + "已保存"状态
+        el("llmKey").value = "";
+        el("llmKey").placeholder = s.has_key ? "已保存 key（如需更换请直接粘贴新 key）" : "sk-...";
+        var kst = el("llmKeyStatus");
+        if (kst) { kst.textContent = s.has_key ? "✓ 已保存" : "未设置"; kst.className = s.has_key ? "text-success" : "muted"; }
         el("llmModel").value = s.model || "";
+        renderAiStatusBanner(s);
       });
     }
+  }
+
+  function renderAiStatusBanner(s) {
+    var banner = el("aiStatusBanner");
+    if (!banner) return;
+    var on = !!(s && s.enabled && s.has_key && s.base_url);
+    if (!on) {
+      banner.className = "ai-status-banner off";
+      banner.innerHTML = "<strong>AI 增强未启用</strong><span>填写 API 地址和 Key 并开启开关即可使用 AI 识别/评分/求职信。</span>";
+    } else if (state.onlineSearchVerified) {
+      banner.className = "ai-status-banner ok";
+      banner.innerHTML = "<strong>AI 增强已连接</strong><span>模型 " + esc((s.model || "")) + " 正常响应。</span>";
+    } else {
+      banner.className = "ai-status-banner warn";
+      banner.innerHTML = "<strong>AI 增强已配置，尚未验证</strong><span>点「测试 AI 连接」确认可用。</span>";
+    }
+  }
+
+  function aiErrorAdvice(message) {
+    message = message || "";
+    if (/401|invalid token|authentication|key.*无效|认证失败/i.test(message)) return "API Key 无效或已过期，请检查是否复制完整（以 sk- 开头），或更换 Key。";
+    if (/403|400|no access|无权访问|模型名/i.test(message)) return "当前模型名无权访问或不存在，点「自动识别模型」选择可用模型。";
+    if (/timeout|timed out|超时/i.test(message)) return "连接超时。检查 API 地址是否可访问，或稍后重试。";
+    if (/ssl|证书|certificate/i.test(message)) return "SSL 证书问题，检查 API 地址是否以 https:// 开头且正确。";
+    if (/404|not found/i.test(message)) return "API 地址路径不对，确认以 /v1 结尾（如 https://xxx.com/v1）。";
+    return "";
   }
 
   async function verifyAiConnection() {
@@ -2180,8 +2211,17 @@
       state.onlineSearchVerified = !!data.ok;
       if (badge && data.ok) badge.textContent = "AI 服务已验证 · " + (data.model || "模型");
       if (data.suggested_base_url && el("llmBase")) el("llmBase").value = data.suggested_base_url;
-      if (status) { status.textContent = data.status + "：" + data.message; status.className = data.ok ? "text-success" : "resume-error"; }
-      if (!data.ok) toast(data.message, "error");
+      if (status) {
+        if (data.ok) {
+          status.textContent = data.status + "：" + data.message; status.className = "text-success";
+        } else {
+          var advice = aiErrorAdvice(data.message || "");
+          status.innerHTML = data.status + "：" + esc(data.message) + (advice ? '<br><strong class="resume-error">→ ' + esc(advice) + "</strong>" : "");
+          status.className = "resume-error";
+        }
+      }
+      if (!data.ok && data.message) toast(data.message, "error");
+      if (state.settings) renderAiStatusBanner(state.settings);
       return !!data.ok;
     } catch (e) {
       state.onlineSearchVerified = false;
@@ -2212,7 +2252,7 @@
     var body = {
       enabled: el("llmEnabled").checked,
       base_url: el("llmBase").value.trim(),
-      api_key: el("llmKey").value.trim(),
+      api_key: el("llmKey").value.trim(), // 留空 = 保留已保存的 key（后端逻辑）
       model: el("llmModel").value.trim()
     };
     if (body.enabled && (!body.base_url || !/^https?:\/\//i.test(body.base_url))) {
@@ -2228,8 +2268,12 @@
       state.onlineSearchAvailable = !!(state.settings.enabled && state.settings.has_key && state.settings.base_url);
       state.onlineSearchVerified = false;
       updateModePill();
+      renderAiStatusBanner(state.settings);
+      // 保存后自动测试连接，立即反馈结果
+      toast("设置已保存，正在验证连接…", "success");
+      var verified = await verifyAiConnection();
+      toast(verified ? "AI 连接验证通过" : "AI 连接验证失败，请查看下方提示", verified ? "success" : "error");
       el("settingsModal").classList.remove("open");
-      toast("设置已保存", "success");
     } catch (e) {
       if (status) { status.textContent = "保存失败：" + e.message; status.className = "resume-error"; }
       toast("保存失败：" + e.message, "error");

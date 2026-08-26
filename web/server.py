@@ -2800,10 +2800,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"ok": False, "error": "设置数据格式不正确"})
                 return
             settings = load_settings()
-            if body.get("api_key") and body["api_key"] != "******":
+            # api_key 语义：非空 = 替换；空 = 保留原值（前端留空不更新）
+            if body.get("api_key"):
                 settings["api_key"] = body["api_key"]
-            elif "api_key" in body and not body.get("api_key"):
-                settings["api_key"] = ""
             settings["base_url"] = normalize_llm_base_url(body.get("base_url", settings["base_url"]))
             settings["model"] = body.get("model", settings["model"])
             settings["enabled"] = bool(body.get("enabled", settings["enabled"]))
