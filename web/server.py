@@ -30,6 +30,7 @@ from pathlib import Path
 
 from profile_merger import apply_paths, build_merge_plan
 from job_extractor import extract_job_from_url, search_jobs, search_company_jobs, decorate_search_results, BUILTIN_ATS_ADAPTERS
+from llm_client import llm_available
 from form_extractor import extract_form
 from form_filler import build_fill_plan
 from resume_extractor import extract_profile_from_resume
@@ -1776,10 +1777,47 @@ def _pick_project_points(profile, job_text, limit=3):
     return scored[:limit]
 
 
+def generate_resume_ai(job, profile):
+    """AI 定制简历：基于 JD + 档案生成 Markdown，不编造经历。失败返回 None 由调用方回退。"""
+    job_text = _text_of(job)[:6000]
+    compact = {
+        "name": profile.get("name", "候选人"),
+        "status": profile.get("status", ""),
+        "city": profile.get("city", ""),
+        "phone": profile.get("phone", ""),
+        "email": profile.get("email", ""),
+        "summary": profile.get("notes", ""),
+        "skills": profile.get("skills", {}),
+        "education": profile.get("education", [])[:1],
+        "experiences": [{k: e.get(k, "") for k in ("company", "title", "period", "points")} for e in profile.get("experiences", [])],
+        "projects": [{k: p.get(k, "") for k in ("title", "period", "points")} for p in profile.get("projects", [])],
+        "certifications": profile.get("certifications", [])[:6],
+        "languages": profile.get("languages", []),
+    }
+    system = (
+        "你是资深校招简历定制专家。基于候选人档案和目标岗位 JD 生成一份中文 Markdown 简历。"
+        "规则：只使用档案中真实存在的内容，禁止编造经历、指标、公司、学历、日期；"
+        "概述（核心优势）必须针对该岗位重写，突出与 JD 关键词匹配的能力；"
+        "项目/经历按与岗位相关度排序，并改写要点使其对齐 JD 用词（不改变事实）；"
+        "技能按 JD 优先级重排并保留未在 JD 中但真实的技能；"
+        "输出标准 Markdown：一级标题为姓名+·个人简历，二级标题为 求职意向/核心优势/项目经历/实习与工作经历/教育背景/专业技能/证书与获奖。不要输出额外解释。"
+    )
+    user = "【目标岗位】\n%s\n\n【候选人档案】\n%s" % (job_text, json.dumps(compact, ensure_ascii=False))
+    try:
+        return llm_chat([{"role": "user", "content": user}], system=system)
+    except Exception:
+        return None
+
+
 def generate_resume(job, profile=None):
     profile = profile or {}
     if profile_is_empty(profile):
         return "请先在「个人资料」中填写姓名、技能、经历与职业目标，才能生成定制简历。"
+    # AI 定制优先：LLM 可用且成功生成时使用；失败/未配置回退本地模板
+    if llm_available():
+        ai_resume = generate_resume_ai(job, profile)
+        if ai_resume and len(ai_resume.strip()) > 80:
+            return ai_resume
     job_text = _text_of(job)
     top_skills = []
     for kws in SKILL_KEYWORDS.values():

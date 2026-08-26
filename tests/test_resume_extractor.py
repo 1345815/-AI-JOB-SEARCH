@@ -468,3 +468,33 @@ def test_notes_extracted_from_overview_and_self_review(monkeypatch):
     assert "企业级 AI 平台" in notes
     assert "责任心强" in notes  # 多段合并
     assert "字节跳动" not in notes  # 不混入经历内容
+
+
+def test_generate_resume_ai_channel_and_fallback(monkeypatch):
+    """简历生成：AI 可用走定制通道；AI 失败/未配置回退本地模板。"""
+    import server as server_mod
+    job = {"title": "AI 应用研发实习生", "company": "转转", "description": "负责 LLM Agent 应用开发、Prompt 优化、数据分析"}
+    profile = {
+        "name": "马育琪", "status": "Data Agent 应用研发", "city": "郑州",
+        "notes": "独立开发企业级多 Agent AI 平台",
+        "skills": {"strong": ["Python", "Agent", "LLM"]},
+        "education": [{"school": "中原工学院", "degree": "本科", "period": "2023-2027"}],
+        "experiences": [{"company": "多益网络", "title": "灵活就业岗", "period": "2026.06-08", "points": ["跑通推广转化链路"]}],
+        "projects": [{"title": "CareerPilot", "period": "2026.03-至今", "points": ["6 Agent 工作流"]}],
+        "certifications": ["省级一等奖"], "languages": [],
+    }
+    # AI 可用 → 用 AI 输出
+    monkeypatch.setattr(server_mod, "llm_available", lambda: True)
+    monkeypatch.setattr(server_mod, "llm_chat", lambda messages, system=None: "# 马育琪 · 个人简历\n\n## 核心优势\n针对 AI 应用研发实习生深度定制的概述内容，强调 LLM Agent 工程与 Prompt 优化能力，匹配岗位关键词。\n\n## 项目经历\n- CareerPilot：企业级多 Agent 平台，6 Agent 工作流")
+    r1 = server_mod.generate_resume(job, profile)
+    assert "深度定制的概述内容" in r1
+    # AI 抛错 → 回退模板
+    def boom(messages, system=None):
+        raise RuntimeError("LLM down")
+    monkeypatch.setattr(server_mod, "llm_chat", boom)
+    r2 = server_mod.generate_resume(job, profile)
+    assert "## 核心优势" in r2 and "AI 定制内容" not in r2
+    # 未配置 → 模板
+    monkeypatch.setattr(server_mod, "llm_available", lambda: False)
+    r3 = server_mod.generate_resume(job, profile)
+    assert "## 项目经历" in r3
