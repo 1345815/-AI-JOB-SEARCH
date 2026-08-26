@@ -23,13 +23,36 @@ PROFILE_FIELDS = [
 
 _CITIES = "北京|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|合肥|长沙|厦门|珠海|天津|重庆|青岛|郑州|济南"
 _HEADERS = {
-    "education": ("教育背景", "教育经历", "教育", "学历背景", "学习经历"),
-    "experiences": ("实习经历", "工作经历", "实践经历", "校园经历", "社会实践", "实习及工作经历", "工作及实习经历", "实习与工作经历", "个人经历", "任职经历"),
-    "projects": ("项目经历", "项目经验", "项目实践", "科研经历", "作品集", "项目", "项目作品"),
-    "skills": ("专业技能", "技能特长", "技能", "专业能力", "核心技能"),
+    "education": ("教育背景", "教育经历", "教育", "学历背景", "学习经历", "学历"),
+    "experiences": ("实习经历", "实习经验", "工作经历", "工作经验", "实践经历", "实践", "校园经历", "社会实践", "社会经历", "任职经历", "职业经历", "实习及工作经历", "工作及实习经历", "实习与工作经历", "实习和项目经历", "个人经历", "暑期实习"),
+    "projects": ("项目经历", "项目经验", "项目实践", "项目", "项目作品", "科研经历", "科研项目", "学术项目", "课程项目", "大创项目", "课题研究", "毕业设计", "作品集", "参与项目"),
+    "skills": ("专业技能", "技能特长", "技能", "专业能力", "核心技能", "技能证书"),
     "certifications": ("证书", "资格", "语言能力"),
-    "goals": ("求职意向", "求职目标", "职业目标", "意向岗位"),
+    "goals": ("求职意向", "求职目标", "职业目标", "意向岗位", "求职方向"),
 }
+
+# 标题行核心词分类：命中任一同义词即归类，从根上避免枚举遗漏
+_SECTION_RULES = [
+    ("education", re.compile(r"(?:教育|学历|学习经历|学业)")),
+    ("experiences", re.compile(r"(?:实习|工作|实践|任职|职业|校园|社会|暑期).{0,3}(?:经历|经验)")),
+    ("projects", re.compile(r"(?:项目|科研|课题|作品|毕设|课程设计)")),
+    ("skills", re.compile(r"技能|专业能力|核心能力|特长|技术栈")),
+    ("certifications", re.compile(r"证书|资格|语言能力|荣誉")),
+    ("goals", re.compile(r"求职意向|职业目标|意向岗位|求职方向|应聘岗位")),
+]
+
+
+def _match_section_title(compact):
+    """判断一行是否为章节标题并归类；返回 key 或 None。
+    要求：短行 + 非动作词开头（避免把'参与项目'这类正文行误判为标题）。"""
+    if not compact or len(compact) > 14:
+        return None
+    if _ACTION_WORDS.match(compact):
+        return None
+    for key, pattern in _SECTION_RULES:
+        if pattern.search(compact):
+            return key
+    return None
 
 # 经历/项目条目中的"内容行"特征：动作词开头或长句
 _ACTION_WORDS = re.compile(r"^(负责|参与|使用|完成|协助|独立|通过|基于|实现|优化|设计|开发|搭建|跟进|撰写|输出|推动|进行|主导|深度|熟练|掌握|了解|熟悉|统筹|策划|执行|分析|调研|访谈|落地|上线|迭代|维护|支持|协作|组织|管理|运营|测试|解决|撰写过|负责过)")
@@ -78,7 +101,7 @@ def _sections(lines):
     active = None
     for line in lines:
         compact = re.sub(r"[：:\s]", "", line)
-        found = next((key for key, names in _HEADERS.items() if any(compact == name or (len(compact) <= 10 and name in compact) for name in names)), None)
+        found = _match_section_title(compact)
         if found:
             active = found
         elif active:

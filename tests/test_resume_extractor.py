@@ -255,3 +255,45 @@ def test_company_title_split_with_date_and_suffix(monkeypatch):
     assert data["experiences"][0]["company"] == "腾讯科技有限公司"
     assert data["experiences"][0]["title"] == "产品运营实习生"
     assert data["experiences"][0]["period"] == "2023.06-2023.09"
+
+
+def test_synonym_section_titles_all_recognized(monkeypatch):
+    """同义词标题（实习经验/工作经验/课题研究/实践经历）全部识别，不因用词不同失败。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """张三
+邮箱：z@example.com
+实习经验
+字节跳动 产品实习生
+负责用户增长
+工作经验
+腾讯科技有限公司 运营
+负责内容运营
+课题研究
+大模型检索增强生成
+负责 RAG 链路搭建
+实践经历
+校园创业团队 队长
+负责团队管理
+"""
+    data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
+    assert len(data["experiences"]) == 3  # 实习经验 + 工作经验 + 实践经历
+    assert "字节跳动" in data["experiences"][0]["company"]
+    assert "腾讯科技" in data["experiences"][1]["company"]
+    assert len(data["projects"]) == 1  # 课题研究
+    assert "检索增强" in data["projects"][0]["title"]
+
+
+def test_body_line_with_项目_word_does_not_split_section(monkeypatch):
+    """正文含'参与项目'不应被误判为新的项目章节。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """钱七
+邮箱：q@example.com
+实习经历
+字节跳动 产品实习生
+负责用户增长
+参与项目：用户增长专题
+负责渠道投放
+"""
+    data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
+    assert len(data["experiences"]) == 1
+    assert data["experiences"][0]["company"] == "字节跳动"
