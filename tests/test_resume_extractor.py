@@ -369,3 +369,61 @@ def test_paste_creates_resume_record_and_can_delete(monkeypatch):
     h3 = Fake(uid); h3.path = "/api/resumes/%d" % resume_id; h3.command = "DELETE"
     server_mod.Handler._api(h3, "DELETE", ["resumes", str(resume_id)])
     assert h3._sent[0] == 200
+
+
+def test_real_resume_fields_for_ai_intern_target(monkeypatch):
+    """真实简历（马育琪 DataAgent）核心字段完整识别——以 AI 应用实习生为目标的场景。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """马育琪
+求职方向：Data Agent 应用研发（实习 / 校招）
+1466588439@qq.com | 19103716492 | 郑州 | github.com/1345815
+中原工学院 · 飞行器控制与信息工程 · 本科 · 2027 届
+实习经历
+多益网络 · 灵活就业岗 灵活就业 · 2026.06 – 2026.08
+- 在游戏公司一线实战，多平台完整跑通「推广 → 注册 → 转化」获客链路
+猿辅导 · 学习规划师 实习生 · 2026.01 – 2026.06
+- 日均 10+ 场一对一咨询，收集用户真实需求并结构化反馈
+项目经历
+CareerPilot｜企业级多 Agent AI 求职平台 独立开发 · 2026.03 – 至今
+Python · SQLite · HTTP API · 自动化测试
+- 独立设计并开发企业级 AI 求职平台，覆盖 7 大功能模块
+简历匹配分析器（AI+NLP 在线工具） 独立开发 · 2025.07 – 至今
+Python · Prompt 工程 · NLP 文本匹配
+- 独立设计并落地 Prompt 驱动的 3 维评估体系
+专业技能
+编程语言 Python（熟练）、C/C++（熟悉）
+数据分析 Pandas · NumPy · Matplotlib
+竞赛与获奖
+全国未来飞行器设计大赛 · 河南赛区 省级一等奖｜2024
+自我评价
+自主驱动 · 快速验证型：从 0 到 1 独立完成多款产品上线
+"""
+    data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
+    assert data["name"] == "马育琪"
+    assert data["phone"] == "19103716492"
+    assert data["city"] == "郑州"
+    assert data["graduation_date"] == "2027年毕业"
+    assert data["career_goals"] == ["Data Agent 应用研发（实习 / 校招）"]
+    assert data["school"] == "中原工学院"
+    assert len(data["experiences"]) == 2
+    assert len(data["projects"]) == 2
+    assert any("一等奖" in c for c in data.get("certifications", []))
+    # 自我评价不应混入获奖
+    assert not any("自主驱动" in c for c in data.get("certifications", []))
+
+
+def test_resume_end_section_self_review_not_leak(monkeypatch):
+    """自我评价作为终止段：内容不混入前一章节。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """张三
+邮箱：z@example.com
+项目经历
+AI 助手
+使用 Python 开发
+自我评价
+责任心强，学习能力强
+"""
+    data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
+    assert len(data["projects"]) == 1
+    assert data["projects"][0]["title"] == "AI 助手"
+    assert not any("责任心" in p for p in data["projects"][0].get("points", []))

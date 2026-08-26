@@ -37,7 +37,7 @@ _SECTION_RULES = [
     ("experiences", re.compile(r"(?:实习|工作|实践|任职|职业|校园|社会|暑期).{0,3}(?:经历|经验)")),
     ("projects", re.compile(r"(?:项目|科研|课题|作品|毕设|课程设计)")),
     ("skills", re.compile(r"技能|专业能力|核心能力|特长|技术栈")),
-    ("certifications", re.compile(r"证书|资格|语言能力|荣誉")),
+    ("certifications", re.compile(r"证书|资格|语言能力|荣誉|竞赛|获奖")),
     ("goals", re.compile(r"求职意向|职业目标|意向岗位|求职方向|应聘岗位")),
 ]
 
@@ -104,6 +104,10 @@ def _sections(lines):
     active = None
     for line in lines:
         compact = re.sub(r"[：:\s]", "", line)
+        # 终止段标题：自我评价/个人简介等不归入任何章节，内容不混入前段
+        if len(compact) <= 10 and re.search(r"自我评价|个人评价|个人简介|自我介绍|关于我|致谢", compact):
+            active = None
+            continue
         found = _match_section_title(compact)
         if found:
             active = found
@@ -263,12 +267,24 @@ def _local_extract(text):
         if match:
             extracted[key] = match.group(0); confidence[key] = "high"; sources[key] = _source(match.group(0))
     city = re.search(r"(?:现居|所在(?:地|城市)?|居住地|工作城市)\s*[:：]?\s*(" + _CITIES + r")", text)
+    if not city:
+        # 简历头部竖线分隔：'邮箱 | 电话 | 郑州 | github'——限定在含邮箱/电话的行内提取，避免正文误匹配
+        header_lines = [line for line in lines[:5] if re.search(r"@|1[3-9]\d{9}", line)]
+        for line in header_lines:
+            m = re.search(r"[|｜]\s*(" + _CITIES + r")\s*[|｜]", line)
+            if m:
+                city = m
+                break
     if city:
         extracted["city"] = city.group(1); confidence["city"] = "high"; sources["city"] = _source(city.group(0))
-    goal = re.search(r"(?:求职意向|意向岗位|求职目标|职业目标)\s*[:：]?\s*([^\n]{2,80})", text)
+    goal = re.search(r"(?:求职意向|意向岗位|求职目标|职业目标|求职方向|应聘岗位|应聘方向|期望岗位)\s*[:：]?\s*([^\n]{2,80})", text)
     if goal:
         value = goal.group(1).strip(" |｜,，；;")
-        extracted["career_goals"], extracted["status"] = _unique(re.split(r"[,，/、|｜]", value)), value
+        # 保护括号内的 "/"（如"实习 / 校招"），避免被拆碎
+        protected = re.sub(r"([（(][^）)]*)/", r"\1<SLASH>", value)
+        goals = _unique(re.split(r"[,，、|｜/]", protected))
+        goals = [g.replace("<SLASH>", "/").strip() for g in goals if g.strip()]
+        extracted["career_goals"], extracted["status"] = goals, value
         confidence["career_goals"] = confidence["status"] = "high"; sources["career_goals"] = sources["status"] = _source(goal.group(0))
     locations = re.search(r"(?:意向城市|期望城市|工作地点)\s*[:：]?\s*([^\n]{2,80})", text)
     if locations:
@@ -281,6 +297,9 @@ def _local_extract(text):
             if value:
                 extracted[key] = value; confidence[key] = confidence["education"]; sources[key] = education_source
         end = re.search(r"(?:-|—|至|~|/)\s*((?:19|20)\d{2})(?:[.年/-]\d{1,2})?", latest["period"])
+        if not end:
+            # 支持 "2027 届" 等格式的毕业时间（原始行里提取）
+            end = re.search(r"((?:19|20)\d{2})\s*届", education_source)
         if end:
             extracted["graduation_date"] = end.group(1) + "年毕业"; confidence["graduation_date"] = confidence["education"]; sources["graduation_date"] = education_source
     for field, section_key, kind in (("experiences", "experiences", "experiences"), ("projects", "projects", "projects")):
@@ -293,7 +312,7 @@ def _local_extract(text):
     english = re.search(r"(?:CET[- ]?[46]|大学英语[四六]级|英语[四六46]级|英语四六级|雅思\s*\d(?:\.\d)?|托福\s*\d{2,3})", text, re.I)
     if english:
         extracted["english_level"] = english.group(0).upper().replace(" ", ""); confidence["english_level"] = "high"; sources["english_level"] = _source(english.group(0))
-    certificates = [line for line in sections["certifications"] if re.search(r"CET|雅思|托福|证书|资格", line, re.I)]
+    certificates = [line for line in sections["certifications"] if re.search(r"CET|雅思|托福|证书|资格|大赛|奖|荣誉", line, re.I)]
     if certificates:
         extracted["certifications"] = _unique(certificates); confidence["certifications"] = "medium"; sources["certifications"] = _source(" ".join(certificates))
     return extracted, confidence, unrecognized, sources
