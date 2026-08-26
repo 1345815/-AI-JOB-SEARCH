@@ -1640,14 +1640,16 @@
   function renderExperienceCards(items) {
     if (!items.length) return '<div class="empty-experience">还没有工作经历，点击右上角添加一条。</div>';
     return items.map(function (item, i) {
-      return '<article class="experience-card editable-card"><div class="experience-fields"><input data-exp="company" data-index="' + i + '" placeholder="公司名称" value="' + esc(item.company || '') + '"><input data-exp="role" data-index="' + i + '" placeholder="职位名称" value="' + esc(item.role || item.title || '') + '"><textarea data-exp="description" data-index="' + i + '" placeholder="工作职责与成果">' + esc(item.description || item.responsibilities || '') + '</textarea></div><em>' + esc(item.start_date || '') + (item.end_date ? ' - ' + esc(item.end_date) : item.current ? ' - 至今' : '') + '</em><button class="icon-btn remove-experience" data-index="' + i + '" title="删除经历">×</button></article>';
+      var desc = item.description || (item.points && item.points.join("\n")) || item.responsibilities || '';
+      return '<article class="experience-card editable-card"><div class="experience-fields"><input data-exp="company" data-index="' + i + '" placeholder="公司名称" value="' + esc(item.company || '') + '"><input data-exp="role" data-index="' + i + '" placeholder="职位名称" value="' + esc(item.role || item.title || '') + '"><textarea data-exp="description" data-index="' + i + '" placeholder="工作职责与成果">' + esc(desc) + '</textarea></div><em>' + esc(item.start_date || '') + (item.end_date ? ' - ' + esc(item.end_date) : item.current ? ' - 至今' : '') + '</em><button class="icon-btn remove-experience" data-index="' + i + '" title="删除经历">×</button></article>';
     }).join('');
   }
 
   function renderProjectCards(items) {
     if (!items.length) return '<div class="empty-experience">还没有项目经验，点击右上角添加一条。</div>';
     return items.map(function (item, i) {
-      return '<article class="experience-card editable-card"><div class="experience-fields"><input data-project="name" data-index="' + i + '" placeholder="项目名称" value="' + esc(item.name || '') + '"><input data-project="role" data-index="' + i + '" placeholder="项目中职责" value="' + esc(item.role || '') + '"><textarea data-project="description" data-index="' + i + '" placeholder="项目描述与成果">' + esc(item.description || '') + '</textarea></div><em>' + esc(item.start_date || '') + (item.end_date ? ' - ' + esc(item.end_date) : item.current ? ' - 至今' : '') + '</em><button class="icon-btn remove-project" data-index="' + i + '" title="删除项目">×</button></article>';
+      var desc = item.description || (item.points && item.points.join("\n")) || '';
+      return '<article class="experience-card editable-card"><div class="experience-fields"><input data-project="name" data-index="' + i + '" placeholder="项目名称" value="' + esc(item.name || item.title || '') + '"><input data-project="role" data-index="' + i + '" placeholder="项目中职责" value="' + esc(item.role || '') + '"><textarea data-project="description" data-index="' + i + '" placeholder="项目描述与成果">' + esc(desc) + '</textarea></div><em>' + esc(item.start_date || '') + (item.end_date ? ' - ' + esc(item.end_date) : item.current ? ' - 至今' : '') + '</em><button class="icon-btn remove-project" data-index="' + i + '" title="删除项目">×</button></article>';
     }).join('');
   }
 
@@ -1932,9 +1934,12 @@
       input.classList.add("resume-autofilled");
       setTimeout(function () { input.classList.remove("resume-autofilled"); }, 2000);
     });
-    var highPaths = (plan.fills || []).concat(plan.updates || []).filter(function (item) {
+    // 一键填入 = fills 全部（新字段，含 medium 的核心教育/经历/项目）+ updates 中 high 的（覆盖已有需高置信）
+    var fillPaths = (plan.fills || []).map(function (item) { return item.field_path; });
+    var updateHighPaths = (plan.updates || []).filter(function (item) {
       return item.confidence === "high";
     }).map(function (item) { return item.field_path; });
+    var highPaths = fillPaths.concat(updateHighPaths);
     try {
       var data = await api("profile/resume-import/apply", { method: "POST", body: { accepted_field_paths: highPaths } });
       state.profile = data.data.profile;

@@ -205,11 +205,26 @@ def _extract_entries(section, kind):
         points = [p for p in points if len(p) > 2][:6]
         if not heading:
             continue
+        # 解析 period 为起止日期（"2026.06 – 2026.08" / "2026.03 – 至今"）
+        start_date, end_date, current = "", "", False
+        period_match = re.search(r"((?:19|20)\d{2}(?:[.年/-]\d{1,2})?)\s*(?:-|—|–|至|~|～|/)\s*((?:19|20)\d{2}(?:[.年/-]\d{1,2})?|至今|现在)", period)
+        if period_match:
+            start_date = period_match.group(1)
+            end_value = period_match.group(2)
+            if end_value in ("至今", "现在"):
+                current = True
+            else:
+                end_date = end_value
+        description = "\n".join(points)
         if kind == "experiences":
             company, title = _split_company_title(heading)
-            entry = {"company": company[:80], "title": (title or heading)[:80], "period": period, "points": points}
+            entry = {"company": company[:80], "title": (title or heading)[:80], "role": (title or heading)[:80],
+                     "period": period, "points": points, "description": description,
+                     "start_date": start_date, "end_date": end_date, "current": current}
         else:
-            entry = {"title": heading[:100], "period": period, "points": points}
+            entry = {"title": heading[:100], "name": heading[:100], "role": "",
+                     "period": period, "points": points, "description": description,
+                     "start_date": start_date, "end_date": end_date, "current": current}
         if entry.get("title") and not any(item.get("title") == entry.get("title") and item.get("period") == period for item in entries):
             entries.append(entry)
             sources.extend(block)
