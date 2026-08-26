@@ -447,3 +447,24 @@ def test_ai_http_503_falls_back_to_local(monkeypatch):
     assert "503" in result.get("fallback_reason", "")
     assert result["extracted"]["name"] == "王五"
     assert result["extracted"]["email"] == "w@example.com"
+
+
+def test_notes_extracted_from_overview_and_self_review(monkeypatch):
+    """个人概述/自我评价应提取到 notes（个人简介）。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """张三
+邮箱：z@example.com
+个人概述
+独立开发企业级 AI 平台，具备 Agent 工作流编排经验
+关注系统准确性与稳定性
+实习经历
+字节跳动 产品实习生
+负责用户增长
+自我评价
+责任心强，学习能力强
+"""
+    data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
+    notes = data.get("notes", "")
+    assert "企业级 AI 平台" in notes
+    assert "责任心强" in notes  # 多段合并
+    assert "字节跳动" not in notes  # 不混入经历内容

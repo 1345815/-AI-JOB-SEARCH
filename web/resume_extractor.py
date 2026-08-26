@@ -257,9 +257,33 @@ def _extract_skills(lines, section):
     return cleaned[:30], _source(content)
 
 
+def _extract_notes(lines):
+    """提取 个人概述/自我评价/个人简介 段内容 → notes（可多段合并）。"""
+    notes = []
+    active = False
+    for line in lines:
+        compact = re.sub(r"[：:\s]", "", line)
+        if len(compact) <= 10 and re.search(r"个人概述|自我评价|个人简介|自我介绍|关于我", compact):
+            active = True
+            continue
+        if active:
+            if len(compact) <= 10 and re.search(r"教育背景|教育经历|实习经历|实习经验|工作经历|工作经验|项目经历|项目经验|专业技能|技能特长|竞赛|获奖|证书|荣誉|求职意向", compact):
+                active = False  # 结束当前段，继续找下一段个人概述/自我评价
+                continue
+            if len(line) > 2:
+                notes.append(line)
+    return "\n".join(notes).strip()[:1200]
+
+
 def _local_extract(text):
     extracted, confidence, sources, unrecognized = {}, {}, {}, []
     lines, sections = _lines(text), _sections(_lines(text))
+    # 个人简介：个人概述/自我评价 段
+    notes = _extract_notes(lines)
+    if notes:
+        extracted["notes"] = notes
+        confidence["notes"] = "medium"
+        sources["notes"] = _source(notes[:260])
     # 姓名：优先 "姓名/Name：XXX"；其次行首 2-4 字中文（后面跟着求职意向/电话/邮箱等特征）
     name = re.search(r"姓\s*名\s*[:：]\s*([\u4e00-\u9fa5]{2,4}|[A-Za-z][A-Za-z .'-]{1,40})", text)
     if not name:
