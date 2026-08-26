@@ -297,3 +297,22 @@ def test_body_line_with_项目_word_does_not_split_section(monkeypatch):
     data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
     assert len(data["experiences"]) == 1
     assert data["experiences"][0]["company"] == "字节跳动"
+
+
+def test_en_dash_date_and_tech_list_lines(monkeypatch):
+    """en dash（–）日期 + 'Python · xxx' 技术清单行：条目应分开、period 提取、清单作要点。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """项目经历
+CareerPilot｜企业级多 Agent AI 求职平台 独立开发 · 2026.03 – 至今
+Python · SQLite · HTTP API · 自动化测试
+简历匹配分析器（AI+NLP 在线工具） 独立开发 · 2025.07 – 至今
+Python · Prompt 工程 · NLP 文本匹配
+"""
+    data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
+    assert len(data["projects"]) == 2
+    assert data["projects"][0]["period"] == "2026.03 – 至今"
+    assert data["projects"][1]["period"] == "2025.07 – 至今"
+    assert "CareerPilot" in data["projects"][0]["title"]
+    # 技术清单行作为要点而非并入标题
+    assert any("SQLite" in p for p in data["projects"][0]["points"])
+    assert "SQLite" not in data["projects"][0]["title"]

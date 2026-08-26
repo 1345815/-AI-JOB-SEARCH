@@ -60,12 +60,15 @@ _COMPANY_MARKER = re.compile(r"(有限公司|有限责任公司|公司|集团|�
 
 
 def _is_content_line(line):
-    """内容行：动作词开头 / 长句 / 含句号分号长内容。"""
+    """内容行：动作词开头 / 长句 / 含句号分号长内容 / 英文开头的技术清单行。"""
     if len(line) > 60:
         return True
     if _ACTION_WORDS.search(line):
         return True
     if ("。" in line or "；" in line or "；" in line) and len(line) > 20:
+        return True
+    # 技术清单行：'Python · SQLite · …' / 'NLP 文本匹配 · 部署' —— 英文/数字开头且含分隔符
+    if re.match(r"^[A-Za-z0-9+#.()（）/（]{1,30}(?:\s*·\s*|\s*/\s*)", line):
         return True
     return False
 
@@ -110,7 +113,7 @@ def _sections(lines):
 
 
 def _period(value):
-    match = re.search(r"((?:19|20)\d{2}(?:[.年/-]\d{1,2})?\s*(?:-|—|至|~|/)\s*(?:(?:19|20)\d{2}(?:[.年/-]\d{1,2})?|至今|现在))", value)
+    match = re.search(r"((?:19|20)\d{2}(?:[.年/-]\d{1,2})?\s*(?:-|—|–|至|~|～|/)\s*(?:(?:19|20)\d{2}(?:[.年/-]\d{1,2})?|至今|现在))", value)
     return match.group(1) if match else ""
 
 
@@ -167,7 +170,7 @@ def _extract_entries(section, kind):
     entries, sources = [], []
     if not section:
         return entries, ""
-    date = re.compile(r"(?:19|20)\d{2}(?:[.年/-]\d{1,2})?\s*(?:-|—|至|~|/)\s*(?:(?:19|20)\d{2}(?:[.年/-]\d{1,2})?|至今|现在)")
+    date = re.compile(r"(?:19|20)\d{2}(?:[.年/-]\d{1,2})?\s*(?:-|—|–|至|~|～|/)\s*(?:(?:19|20)\d{2}(?:[.年/-]\d{1,2})?|至今|现在)")
     starts = [index for index, line in enumerate(section) if date.search(line)]
     if not starts:
         # 无日期格式：标题行（非内容行、短行）作为条目起点；上一行是内容行时开始新条目
