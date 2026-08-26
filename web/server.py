@@ -15,6 +15,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import secrets
 import sqlite3
 import tempfile
