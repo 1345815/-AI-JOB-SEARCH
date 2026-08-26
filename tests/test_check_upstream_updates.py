@@ -53,12 +53,15 @@ class UpstreamCheckerRepoFixture(unittest.TestCase):
         subprocess.run(["git", "remote", "add", name, url], cwd=self.root, check=True, capture_output=True)
 
     def materialize_remote_ref(self, name: str) -> None:
-        subprocess.run(
-            ["git", "update-ref", f"refs/remotes/{name}/master", "HEAD"],
-            cwd=self.root,
-            check=True,
-            capture_output=True,
-        )
+        # 模拟"已 fetch 过 remote"：在 refs/remotes/<name>/ 下创建 master 引用。
+        # 注意：不能用 `git update-ref refs/remotes/...` —— Git 2.55.0.windows.3
+        # 对该路径静默失败（rc=0 但 ref 不落盘），导致 rev-parse 找不到。
+        ref_dir = self.root / ".git" / "refs" / "remotes" / name
+        ref_dir.mkdir(parents=True, exist_ok=True)
+        head_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        (ref_dir / "master").write_text(head_sha + "\n", encoding="utf-8")
 
     def run_checker(self, *args) -> subprocess.CompletedProcess:
         return subprocess.run(
