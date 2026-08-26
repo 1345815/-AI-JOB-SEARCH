@@ -3533,6 +3533,9 @@ def main():
         )
     from cache import start_cleanup_scheduler
     start_cleanup_scheduler(float(os.environ.get("CLEANUP_INTERVAL_HOURS", "1")) * 3600)
+    if os.environ.get("JOB_REFRESH_ENABLED", "1") == "1":
+        from job_refresh import start_job_refresh_scheduler
+        start_job_refresh_scheduler()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"CareerPilot Web 已启动：http://{args.host}:{args.port}")
     print("按 Ctrl+C 停止服务。")
