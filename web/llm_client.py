@@ -5,7 +5,7 @@ import os
 import urllib.request
 from pathlib import Path
 
-SETTINGS_FILE = Path(__file__).resolve().parent / "data" / "settings.json"
+SETTINGS_FILE = Path(os.environ.get("SETTINGS_FILE", str(Path(__file__).resolve().parent / "data" / "settings.json")))
 LLM_TIMEOUT_SECONDS = int(os.environ.get("LLM_TIMEOUT_SECONDS", "35"))
 
 

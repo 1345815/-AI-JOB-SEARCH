@@ -48,7 +48,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 STATIC_DIR = ROOT / "static"
 JOBS_SEED = DATA_DIR / "jobs_seed.json"
-SETTINGS_FILE = DATA_DIR / "settings.json"
+SETTINGS_FILE = Path(os.environ.get("SETTINGS_FILE", str(DATA_DIR / "settings.json")))
 DB_FILE = Path(os.environ.get("DB_PATH", str(DATA_DIR / "careerpilot.db")))
 RESUME_DIR = DATA_DIR / "resumes"
 
@@ -2028,7 +2028,11 @@ def llm_chat(messages, system=None):
             detail = exc.read(600).decode("utf-8", errors="replace")
         except Exception:
             pass
-        _LLM_LAST_ERROR = "HTTP " + str(exc.code) + ("：" + detail[:220] if detail else "")
+        # 模型名无权限/不存在是最常见的配置错误，给可执行提示
+        if exc.code in (400, 401, 403) and re.search(r"model|模型", detail, re.I):
+            _LLM_LAST_ERROR = ("HTTP %d：当前模型名无效或无访问权限（可用模型请点击设置里的『自动识别模型』）" % exc.code)
+        else:
+            _LLM_LAST_ERROR = "HTTP " + str(exc.code) + ("：" + detail[:220] if detail else "")
         return None
     except Exception as exc:
         _LLM_LAST_ERROR = str(exc)[:240]

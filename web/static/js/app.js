@@ -2199,6 +2199,8 @@
       var list = el("llmModelOptions");
       if (list) list.innerHTML = models.map(function (model) { return '<option value="' + esc(model) + '"></option>'; }).join("");
       if (models.length && !el("llmModel").value.trim()) el("llmModel").value = models[0];
+      // 已有模型名但不在可用列表时（如 token 无权访问的旧模型），用识别到的第一个替换
+      if (models.length && models.indexOf(el("llmModel").value.trim()) === -1) el("llmModel").value = models[0];
       if (status) { status.textContent = data.status + "：" + data.message + (models.length ? " 可用模型：" + models.slice(0, 8).join("、") : ""); status.className = models.length ? "text-success" : "resume-error"; }
       if (!models.length) toast(data.message, "error");
     } catch (e) { if (status) { status.textContent = "识别失败：" + e.message; status.className = "resume-error"; } toast("模型识别失败：" + e.message, "error"); }
