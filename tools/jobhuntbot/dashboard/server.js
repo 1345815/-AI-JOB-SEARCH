@@ -380,7 +380,7 @@ const server = http.createServer((req, res) => {
 
 // Bind to localhost only — this server can now write to job_pool.csv, so it
 // shouldn't be reachable from other devices on the network.
-server.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log('Dashboard running / 仪表盘已启动: http://localhost:' + PORT + '/dashboard.html');
   console.log('Keep this window open to keep serving; close it or press Ctrl+C to stop.');
   console.log('保持这个窗口开着；关掉窗口或按 Ctrl+C 即可停止服务。');

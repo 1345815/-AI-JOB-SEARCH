@@ -24,3 +24,12 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+
+  # JobHuntBot：独立看板容器（Node 零依赖），端口 8420，数据随宿主机目录持久化
+  jobhuntbot:
+    build: ./tools/jobhuntbot
+    ports:
+      - "${JOBHUNTBOT_PORT:-8420}:8420"
+    volumes:
+      - ./tools/jobhuntbot/dashboard:/app/dashboard
+    restart: unless-stopped

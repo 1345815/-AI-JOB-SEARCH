@@ -40,3 +40,11 @@ CareerPilot 简历库识别出的结构化档案（JSON），可手动作为 Job
 
 - 上游更新：重新 clone `DanielPan12/JobHuntBot` 覆盖 `tools/jobhuntbot/` 内容（保留自己的 CSV 数据）
 - 本仓库不修改上游代码；如需改动，标注为本地 patch 并说明
+- **本地 patch（生产部署必需）**：`dashboard/server.js` 监听地址 `127.0.0.1 → 0.0.0.0`（容器对外提供服务），端口仍 8420
+
+## 生产部署（独立容器）
+
+- `docker-compose.yml` 新增 `jobhuntbot` 服务：node:20-alpine 构建，端口 `8420`（`JOBHUNTBOT_PORT` 可调）
+- 数据持久化：volume 挂载宿主机 `tools/jobhuntbot/dashboard`（CSV 存宿主机，与 CareerPilot `./data` 卷同模式）
+- 生命周期独立：`docker compose up -d jobhuntbot`，与 `app` 容器互不影响
+- 验证：`curl http://<server>:8420/dashboard.html` 应 200
