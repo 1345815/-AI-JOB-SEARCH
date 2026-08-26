@@ -54,7 +54,7 @@ SETTINGS_FILE = Path(os.environ.get("SETTINGS_FILE", str(DATA_DIR / "settings.js
 DB_FILE = Path(os.environ.get("DB_PATH", str(DATA_DIR / "careerpilot.db")))
 RESUME_DIR = DATA_DIR / "resumes"
 
-SESSION_MAX_AGE_DAYS = int(os.environ.get("SESSION_MAX_AGE_DAYS", "7"))
+SESSION_MAX_AGE_DAYS = int(os.environ.get("SESSION_MAX_AGE_DAYS", "30"))
 SESSION_COOKIE = "careerpilot_session"
 MAX_JSON_BODY_BYTES = int(os.environ.get("MAX_JSON_BODY_BYTES", str(1024 * 1024)))
 LOGIN_RATE_LIMIT = int(os.environ.get("LOGIN_RATE_LIMIT", "5"))
@@ -3453,9 +3453,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if action == "guest" and method == "POST":
             guest_id = create_guest_user()
-            token = create_session(guest_id)
+            token = create_session(guest_id, 2592000)
             user = user_public(get_user_by_token(token))
-            self._send(200, {"ok": True, "user": user}, set_cookie=self._session_cookie(token))
+            self._send(200, {"ok": True, "user": user}, set_cookie=self._session_cookie(token, True))
             return
 
         if action == "upgrade" and method == "POST":

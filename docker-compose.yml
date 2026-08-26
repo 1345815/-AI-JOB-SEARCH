@@ -8,7 +8,7 @@ services:
     environment:
       - DB_PATH=/app/data/careerpilot.db
       - SETTINGS_FILE=/app/data/settings.json
-      - SESSION_MAX_AGE_DAYS=${SESSION_MAX_AGE_DAYS:-7}
+      - SESSION_MAX_AGE_DAYS=${SESSION_MAX_AGE_DAYS:-30}
       - MAX_JSON_BODY_BYTES=${MAX_JSON_BODY_BYTES:-1048576}
       - LOGIN_RATE_LIMIT=${LOGIN_RATE_LIMIT:-5}
       - LOGIN_RATE_WINDOW_SECONDS=${LOGIN_RATE_WINDOW_SECONDS:-900}
