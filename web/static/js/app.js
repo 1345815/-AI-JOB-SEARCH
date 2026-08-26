@@ -1550,6 +1550,11 @@
       '<div class="panel-body">' +
       '<div class="upload-zone" id="uploadZone"><input type="file" id="resumeFile" accept=".pdf,.docx,.txt,.md" multiple hidden>' +
       '<strong>点击选择或拖拽简历文件</strong><span class="muted">可一次上传多份历史简历；识别学校、专业、毕业时间、实习、项目、技能，逐项确认后写入</span></div>' +
+      '<div class="flex mt-8" style="gap:8px;align-items:center;flex-wrap:wrap">' +
+      '<span class="muted text-sm">或</span>' +
+      '<input id="resumePasteText" type="text" placeholder="粘贴文字版简历全文，直接识别（最快）" style="flex:1;min-width:200px;min-height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:6px">' +
+      '<button class="btn btn-primary" id="resumePasteBtn">粘贴识别</button>' +
+      "</div>" +
       '<div id="resumeImportStatus" class="mt-8" role="status" aria-live="polite" aria-atomic="true"></div>' +
       "</div></div>" +
       '<div class="panel mb-14"><div class="panel-head"><strong>我的简历</strong><span class="sub" id="resumeListCount"></span></div>' +
@@ -1603,6 +1608,7 @@
       body.style.display = state.advancedExpanded ? "" : "none";
       this.textContent = state.advancedExpanded ? "收起编辑" : "展开编辑";
     });
+    el("resumePasteBtn").addEventListener("click", pasteResumeText);
     el("saveIntent").addEventListener("click", saveIntent);
     el("saveProfile").addEventListener("click", saveProfile);
     bindUploadZone();
@@ -1698,6 +1704,45 @@
     });
   }
 
+  async function pasteResumeText() {
+    var input = el("resumePasteText");
+    var status = el("resumeImportStatus");
+    var text = (input.value || "").trim();
+    if (!text) { toast("请先粘贴简历文本", "warn"); return; }
+    if (status) status.innerHTML = '<div class="resume-loading">正在识别粘贴的简历…</div>';
+    var btn = el("resumePasteBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "识别中…"; }
+    try {
+      var data = await api("profile/resume-import/text", { method: "POST", body: { text: text } });
+      if (status) status.innerHTML = "";
+      if (data && data.data && data.data.plan) renderResumeImportResult(data.data.plan);
+      else if (data && data.data) renderResumeImportResult(data.data);
+      else toast("识别完成，请核对结果", "success");
+      input.value = "";
+    } catch (e) {
+      if (status) status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "粘贴识别"; }
+    }
+  }
+
+  function renderResumeImportResult(plan) {
+    renderResumeSummary(plan);
+    renderMergePlan(plan);
+    // 识别后自动展开完整档案，让用户立即看到字段已填入/待补全
+    state.advancedExpanded = true;
+    var body = el("advancedProfileBody");
+    var toggle = el("toggleAdvanced");
+    if (body) body.style.display = "";
+    if (toggle) toggle.textContent = "收起编辑";
+    // AI 不可用时的本地规则降级提示
+    if (plan && plan.fallback) {
+      toast("AI 识别暂不可用，已用本地规则识别，请重点核对低置信度字段", "warn");
+    } else {
+      toast("识别完成，可逐项确认后填入", "success");
+    }
+  }
+
   async function uploadResume(files) {
     files = Array.prototype.slice.call(files || []);
     if (!files.length) return;
@@ -1728,8 +1773,9 @@
       var d = data.data || {};
       status.innerHTML = "";
       if (d.plan) {
-        renderResumeSummary(d.plan);
-        renderMergePlan(d.plan);
+        renderResumeImportResult(d.plan);
+      } else if (d.summary || d.fills) {
+        renderResumeImportResult(d);
       }
       if (d.errors && d.errors.length) {
         status.innerHTML = '<div class="resume-error">' + d.errors.map(function (e) {
@@ -1738,7 +1784,7 @@
       }
       loadResumeList();
       var done = (d.items || []).length;
-      toast(done + " 份简历已存入简历库，识别结果可逐项确认", "success");
+      if (!d.summary && !d.fills) toast(done + " 份简历已存入简历库，识别结果可逐项确认", "success");
     } catch (e) {
       status.innerHTML = '<div class="resume-error">' + esc(e.message) + "</div>";
     } finally {
@@ -1833,11 +1879,23 @@
       var value = summary[item[1]];
       return '<div class="resume-summary-chip' + (value ? '' : ' is-empty') + '"><span>' + esc(item[0]) + '</span><strong>' + esc(value || "未识别") + '</strong></div>';
     }).join("");
+    var missingFields = [
+      ["姓名", "name", "profileName"], ["手机", "phone", "profilePhone"], ["邮箱", "email", "profileEmail"],
+      ["学校", "school", "profileSchool"], ["专业", "major", "profileMajor"], ["毕业时间", "graduation_date", "profileGraduation"]
+    ].filter(function (item) { return !summary[item[1]]; });
+    var missingGuide = missingFields.length
+      ? '<div class="resume-missing-guide"><strong>还有 ' + missingFields.length + ' 个必填字段未识别：</strong>' +
+        missingFields.map(function (item) {
+          return '<button class="btn btn-sm" data-fill-field="' + item[2] + '" type="button">' + esc(item[0]) + '</button>';
+        }).join("") +
+        '<span class="muted text-sm">点击定位到输入框快速补全</span></div>'
+      : '<div class="resume-missing-guide ok"><strong>必填字段已全部识别 ✓</strong></div>';
     panel.innerHTML = '<section class="resume-summary-card mb-14"><div class="resume-summary-main">' +
       '<div class="resume-summary-avatar">' + esc(initial) + '</div><div class="resume-summary-content">' +
       '<div class="resume-summary-heading"><h2>' + esc(name) + '</h2><span class="tag">' + esc(summary.status || "待完善") + '</span></div>' +
       '<div class="resume-detection-meta">已识别 ' + detected + ' 个核心字段' + (lowConfidence ? '，其中 ' + lowConfidence + ' 项建议人工核对' : '，暂未发现低置信度字段') + '</div>' +
       (hasCore ? '<div class="resume-summary-chips">' + chips + '</div>' : '<div class="resume-summary-empty"><strong>未识别到核心字段</strong><span>试试 PDF 文字版简历，或检查文件是否加密</span></div>') +
+      missingGuide +
       '</div></div><div class="resume-summary-actions"><button class="btn btn-primary" id="fillResumeSummary">一键填入全部</button>' +
       '<button class="btn" id="toggleResumeReview">展开逐项核对</button></div></section>';
     el("fillResumeSummary").disabled = !hasCore;
@@ -1846,6 +1904,17 @@
       var merge = el("resumeMergePanel");
       merge.classList.toggle("is-expanded");
       this.textContent = merge.classList.contains("is-expanded") ? "收起逐项核对" : "展开逐项核对";
+    });
+    document.querySelectorAll("[data-fill-field]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var target = el(btn.getAttribute("data-fill-field"));
+        state.advancedExpanded = true;
+        var body = el("advancedProfileBody");
+        if (body) body.style.display = "";
+        var toggle = el("toggleAdvanced");
+        if (toggle) toggle.textContent = "收起编辑";
+        if (target) { target.focus(); target.scrollIntoView({ behavior: "smooth", block: "center" }); }
+      });
     });
   }
 

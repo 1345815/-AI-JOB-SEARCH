@@ -113,6 +113,21 @@ def _extract_entries(section, kind):
         return entries, ""
     date = re.compile(r"(?:19|20)\d{2}(?:[.年/-]\d{1,2})?\s*(?:-|—|至|~|/)\s*(?:(?:19|20)\d{2}(?:[.年/-]\d{1,2})?|至今|现在)")
     starts = [index for index, line in enumerate(section) if date.search(line)]
+    if not starts:
+        # 无日期格式：按"标题行特征"分段（公司/项目名 与 职责要点 区分）
+        starts = []
+        company_marker = re.compile(r"(?:有限公司|有限责任公司|公司|集团|科技|网络|信息|软件|研究院|实验室|工作室|事业部|团队)")
+        for index, line in enumerate(section):
+            is_title = (
+                company_marker.search(line)
+                or (kind == "projects" and (re.match(r"^[^，。；]{2,30}项目", line) or "项目" in line and len(line) <= 40))
+                or (index == 0 and len(line) <= 40)
+            )
+            prev_is_content = index > 0 and len(section[index - 1]) > 40
+            if is_title and (index == 0 or prev_is_content):
+                starts.append(index)
+        if not starts:
+            starts = [0]
     for number, start in enumerate(starts):
         block = section[start:(starts[number + 1] if number + 1 < len(starts) else len(section))]
         heading, period = block[0], _period(block[0])
@@ -141,25 +156,42 @@ def _extract_skills(lines, section):
         "用户研究", "数据分析", "机器学习", "深度学习", "大模型", "LLM",
         "Prompt", "项目管理", "运营", "英语",
     ]
-    skills = [hint for hint in hints if re.search(re.escape(hint), content, re.I)]
+    skills = [hint for hint in hints if re.search(r"[\u4e00-\u9fa5A-Za-z+#.]?" + re.escape(hint) + r"[\u4e00-\u9fa5A-Za-z+#.]?", content, re.I)]
+    # 仅从"标题行：技能列表"或带分隔符的行提取，避免把普通句子拆成技能
     for line in section:
         if "：" in line or ":" in line:
-            skills.extend(re.split(r"[,，;；、/|｜]", re.split(r"[:：]", line, maxsplit=1)[1]))
-        skills.extend(re.split(r"[、,，]", line))
-    cleaned = [skill for skill in _unique(skills) if 1 < len(skill) <= 24 and not re.search(r"^(熟悉|掌握|了解|具备)$", skill)]
+            left, _, right = line.partition(":") if ":" in line else line.partition("：")
+            left = left.strip(" |｜·,，-—")
+            if len(left) <= 12 and not re.search(r"[。！？.!?]", right):
+                skills.extend(re.split(r"[,，;；、/|｜\s]+", right.strip()))
+        elif len(line) <= 60 and re.search(r"[,，、/]", line) and not re.search(r"[。！？.!?]", line):
+            skills.extend(re.split(r"[,，、/|｜\s]+", line))
+    cleaned = [skill for skill in _unique(skills) if 1 < len(skill) <= 24 and not re.search(r"^(熟悉|掌握|了解|具备)$", skill) and not re.search(r"[。；;！？]", skill)]
     return cleaned[:30], _source(content)
 
 
 def _local_extract(text):
     extracted, confidence, sources, unrecognized = {}, {}, {}, []
     lines, sections = _lines(text), _sections(_lines(text))
+    # 姓名：优先 "姓名/Name：XXX"；其次行首 2-4 字中文（后面跟着求职意向/电话/邮箱等特征）
     name = re.search(r"姓\s*名\s*[:：]\s*([\u4e00-\u9fa5]{2,4}|[A-Za-z][A-Za-z .'-]{1,40})", text)
     if not name:
-        candidate = next((line for line in lines[:10] if re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", line)), "")
-        name = re.match(r"(.+)", candidate) if candidate else None
+        name = re.search(r"([\u4e00-\u9fa5]{2,4})\s*[:：|｜]\s*(?:求职意向|意向岗位|目标岗位|电话|手机|邮箱|E-?mail|现居|所在)", text)
+    if not name:
+        for line in lines[:10]:
+            if re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", line):
+                name = re.match(r"(.+)", line)
+                break
     if name:
         extracted["name"] = name.group(1).strip(); confidence["name"] = "high" if "姓名" in text else "medium"; sources["name"] = _source(name.group(0))
-    for key, match in (("email", re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)), ("phone", re.search(r"(?<!\d)(1[3-9]\d{9})(?!\d)", text)), ("github", re.search(r"https?://(?:www\.)?github\.com/[\w.-]+", text, re.I))):
+    # 电话：容忍空格/括号/分隔符；优先精确 11 位，其次宽松匹配
+    phone_match = re.search(r"(?<!\d)(1[3-9]\d{9})(?!\d)", text)
+    if not phone_match:
+        phone_match = re.search(r"(?<!\d)(1[3-9])[\s()-]*(\d)[\s()-]*(\d)[\s()-]*(\d)[\s()-]*(\d)[\s()-]*(\d)[\s()-]*(\d)[\s()-]*(\d)[\s()-]*(\d)[\s()-]*(\d)(?!\d)", text)
+        if phone_match:
+            digits = phone_match.group(0).replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+            phone_match = re.match(r"(.+)", digits)
+    for key, match in (("email", re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)), ("phone", phone_match), ("github", re.search(r"https?://(?:www\.)?github\.com/[\w.-]+", text, re.I))):
         if match:
             extracted[key] = match.group(0); confidence[key] = "high"; sources[key] = _source(match.group(0))
     city = re.search(r"(?:现居|所在(?:地|城市)?|居住地|工作城市)\s*[:：]?\s*(" + _CITIES + r")", text)
@@ -233,7 +265,11 @@ def _summary(extracted):
 
 
 def extract_profile_from_resume(text, user_id):
-    """Return a reviewable extraction; it never writes a profile directly."""
+    """Return a reviewable extraction; it never writes a profile directly.
+
+    AI 通道失败时自动降级到本地规则，绝不把"识别不可用"抛给用户。
+    返回值含 fallback 标志（True = 本地规则结果，AI 不可用）。
+    """
     if llm_available():
         last_error = None
         for _ in range(2):
@@ -266,9 +302,14 @@ def extract_profile_from_resume(text, user_id):
                     for path in paths if raw_sources.get(path)
                 }
                 unrecognized = raw.get("unrecognized", []) if isinstance(raw.get("unrecognized"), list) else []
-                return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": sources, "summary": _summary(extracted)}
+                return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": sources, "summary": _summary(extracted), "fallback": False}
             except RuntimeError as exc:
                 last_error = exc
-        raise ExtractionError("AI 简历识别暂时不可用：" + str(last_error)[:160])
+        # AI 通道不可用：降级到本地规则，而不是把错误抛给用户
+        extracted, confidence, unrecognized, sources = _local_extract(text)
+        result = {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": sources, "summary": _summary(extracted), "fallback": True}
+        if last_error:
+            result["fallback_reason"] = str(last_error)[:160]
+        return result
     extracted, confidence, unrecognized, sources = _local_extract(text)
-    return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": sources, "summary": _summary(extracted)}
+    return {"extracted": extracted, "confidence": confidence, "unrecognized": unrecognized, "source_text": sources, "summary": _summary(extracted), "fallback": False}

@@ -26,7 +26,8 @@ def test_llm_normal_and_filters_extra_fields(monkeypatch):
     assert result["unrecognized"] == ["无法归类的内容"]
 
 
-def test_non_json_retries_then_raises(monkeypatch):
+def test_non_json_retries_then_falls_back_to_local(monkeypatch):
+    """AI 两次失败后不再抛错，降级到本地规则并标记 fallback。"""
     monkeypatch.setattr(resume_extractor, "llm_available", lambda: True)
     calls = {"n": 0}
 
@@ -35,9 +36,13 @@ def test_non_json_retries_then_raises(monkeypatch):
         raise RuntimeError("bad json")
 
     monkeypatch.setattr(resume_extractor, "request_json", fail)
-    with pytest.raises(resume_extractor.ExtractionError):
-        resume_extractor.extract_profile_from_resume("简历内容", 1)
+    text = "姓名：钱七\n邮箱：q@example.com\n技能：Python、运营\n"
+    result = resume_extractor.extract_profile_from_resume(text, 1)
     assert calls["n"] == 2
+    assert result["fallback"] is True
+    assert "fallback_reason" in result
+    assert result["extracted"].get("name") == "钱七"
+    assert result["extracted"].get("email") == "q@example.com"
 
 
 def test_local_fallback_without_llm(monkeypatch):
@@ -76,3 +81,112 @@ CET-6
     assert data["projects"][0]["title"] == "校园求职助手"
     assert "Python" in data["skills"]["strong"]
     assert result["source_text"]["education"]
+
+
+def test_name_without_姓名字段_and_phone_with_spaces(monkeypatch):
+    """行首姓名 + 特征后缀；带空格/分隔符手机号。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """李雷
+求职意向：AI 游戏策划
+电话：139 1234 5678
+邮箱：lilei@example.com
+教育背景
+2021.09 - 2025.06 华中科技大学 数字媒体技术 本科
+专业技能
+Unity、C#、Python
+"""
+    result = resume_extractor.extract_profile_from_resume(text, 1)
+    data = result["extracted"]
+    assert data["name"] == "李雷"
+    assert data["phone"] == "13912345678"
+    assert data["school"] == "华中科技大学"
+    assert data["major"] == "数字媒体技术"
+    assert "Unity" in data["skills"]["strong"]
+
+
+def test_experience_segmentation_without_dates(monkeypatch):
+    """无日期格式的简历：按公司/项目名特征分段。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """王强
+求职意向：产品运营
+邮箱：wq@example.com
+实习经历
+腾讯科技有限公司 产品运营实习生
+负责用户增长与活动策划
+通过数据复盘优化转化率
+项目经历
+校园二手交易平台
+使用 Python 完成推荐系统
+"""
+    result = resume_extractor.extract_profile_from_resume(text, 1)
+    data = result["extracted"]
+    assert len(data["experiences"]) == 1
+    assert "腾讯" in data["experiences"][0]["company"]
+    assert len(data["projects"]) == 1
+    assert "二手交易" in data["projects"][0]["title"]
+
+
+def test_skill_extraction_does_not_split_sentences(monkeypatch):
+    """技能提取不把普通句子拆成技能。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """赵敏
+邮箱：zm@example.com
+专业技能
+Python、SQL、数据分析
+在实习期间负责用户增长数据分析
+"""
+    result = resume_extractor.extract_profile_from_resume(text, 1)
+    skills = result["extracted"]["skills"]["strong"]
+    assert "Python" in skills
+    assert "SQL" in skills
+    # 普通句子不应被拆进技能
+    assert not any("在实习期间" in s or "负责用户增长数据分析" == s for s in skills)
+
+
+def test_text_import_builds_plan_and_draft(monkeypatch):
+    """粘贴文本识别：生成 plan 并落 pending 草稿。"""
+    import tempfile
+    import server as server_mod
+    tmp_dir = tempfile.mkdtemp()
+    monkeypatch.setattr(server_mod, "DB_FILE", __import__("pathlib").Path(tmp_dir) / "t.db")
+    server_mod.init_db()
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+
+    with server_mod._DB_LOCK:
+        conn = server_mod.db()
+        cur = conn.execute("INSERT INTO users (username, role, profile_json) VALUES ('u','user','{}')")
+        conn.commit()
+        uid = cur.lastrowid
+        conn.close()
+
+    class Fake(server_mod.Handler):
+        def __init__(self):
+            self.path = "/api/profile/resume-import/text"
+            self.command = "POST"
+            self._sent = None
+            self.client_address = ("127.0.0.1", 0)
+            self.uid = uid
+        def _send(self, code, body, *a, **k):
+            self._sent = (code, body)
+        def _json_body(self):
+            return {"text": "姓名：周八\n邮箱：zb@example.com\n学校：厦门大学\n专业：计算机科学与技术\n技能：Python、数据分析\n教育背景\n2020.09-2024.06 厦门大学 本科\n项目经历\n校园招聘助手\n使用 Python 完成简历解析功能"}
+        def _current_user(self):
+            with server_mod._DB_LOCK:
+                conn = server_mod.db()
+                row = conn.execute("SELECT * FROM users WHERE id=?", (self.uid,)).fetchone()
+                conn.close()
+            return dict(row) if row else None
+
+    h = Fake()
+    server_mod.Handler._api(h, "POST", ["profile", "resume-import", "text"])
+    code, body = h._sent
+    assert code == 200
+    plan = body["data"]
+    assert plan["summary"]["name"] == "周八"
+    assert plan["summary"]["email"] == "zb@example.com"
+    # 草稿已落库
+    with server_mod._DB_LOCK:
+        conn = server_mod.db()
+        row = conn.execute("SELECT * FROM resume_import_drafts WHERE user_id=? AND status='pending'", (uid,)).fetchone()
+        conn.close()
+    assert row is not None

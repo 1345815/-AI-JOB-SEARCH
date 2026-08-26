@@ -2245,6 +2245,35 @@ class Handler(BaseHTTPRequestHandler):
             return None, 400, "缺少 file 字段"
         return uploaded, 200, ""
 
+    def _build_import_plan(self, user, text):
+        """识别简历文本并构建合并计划；同时落一条 pending 草稿。"""
+        current = _safe_json(user.get("profile_json"), {})
+        result = extract_profile_from_resume(text, user["id"])
+        plan = build_merge_plan(current, result["extracted"], result["confidence"])
+        sources = result.get("source_text", {})
+        for group in ("fills", "updates"):
+            for item in plan.get(group, []):
+                path = item["field_path"]
+                if path in sources:
+                    item["source_text"] = sources[path]
+        plan["unrecognized"] = result.get("unrecognized", [])
+        plan["summary"] = result.get("summary", {})
+        if result.get("fallback"):
+            plan["fallback"] = True
+        with _DB_LOCK:
+            conn = db()
+            conn.execute(
+                "UPDATE resume_import_drafts SET status='discarded' WHERE user_id=? AND status='pending'",
+                (user["id"],),
+            )
+            conn.execute(
+                "INSERT INTO resume_import_drafts (user_id, merge_plan_json, status) VALUES (?,?, 'pending')",
+                (user["id"], json.dumps(plan, ensure_ascii=False)),
+            )
+            conn.commit()
+            conn.close()
+        return plan
+
     def _api_resume_import(self, method, parts, user):
         current = normalize_profile(_safe_json(user.get("profile_json"), {}))
 
@@ -2316,28 +2345,7 @@ class Handler(BaseHTTPRequestHandler):
                 if parsed.get("warning"):
                     self._send(400, {"ok": False, "error": parsed["warning"]})
                     return
-                result = extract_profile_from_resume(parsed["text"], user["id"])
-                plan = build_merge_plan(current, result["extracted"], result["confidence"])
-                sources = result.get("source_text", {})
-                for group in ("fills", "updates"):
-                    for item in plan.get(group, []):
-                        path = item["field_path"]
-                        if path in sources:
-                            item["source_text"] = sources[path]
-                plan["unrecognized"] = result.get("unrecognized", [])
-                plan["summary"] = result.get("summary", {})
-                with _DB_LOCK:
-                    conn = db()
-                    conn.execute(
-                        "UPDATE resume_import_drafts SET status='discarded' WHERE user_id=? AND status='pending'",
-                        (user["id"],),
-                    )
-                    conn.execute(
-                        "INSERT INTO resume_import_drafts (user_id, merge_plan_json, status) VALUES (?,?, 'pending')",
-                        (user["id"], json.dumps(plan, ensure_ascii=False)),
-                    )
-                    conn.commit()
-                    conn.close()
+                plan = self._build_import_plan(user, parsed["text"])
                 self._send(200, {"ok": True, "data": plan})
             except ValueError as exc:
                 self._send(400, {"ok": False, "error": str(exc)})
@@ -2352,6 +2360,19 @@ class Handler(BaseHTTPRequestHandler):
                     os.unlink(tmp.name)
                 except Exception:
                     pass
+            return
+
+        if method == "POST" and parts and parts[0] == "text":
+            body = self._json_body()
+            text = (body.get("text") or "").strip()
+            if len(text) < 50:
+                self._send(400, {"ok": False, "error": "粘贴的文本过短，请粘贴完整简历内容（至少 50 字）"})
+                return
+            if len(text) > 30000:
+                self._send(413, {"ok": False, "error": "文本超过 3 万字符上限"})
+                return
+            plan = self._build_import_plan(user, text)
+            self._send(200, {"ok": True, "data": plan})
             return
 
         self._send(404, {"ok": False, "error": "not found"})
