@@ -23,13 +23,46 @@ PROFILE_FIELDS = [
 
 _CITIES = "北京|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|合肥|长沙|厦门|珠海|天津|重庆|青岛|郑州|济南"
 _HEADERS = {
-    "education": ("教育背景", "教育经历", "教育", "学历背景"),
-    "experiences": ("实习经历", "工作经历", "实践经历", "校园经历", "社会实践"),
-    "projects": ("项目经历", "项目经验", "科研经历", "作品集"),
+    "education": ("教育背景", "教育经历", "教育", "学历背景", "学习经历"),
+    "experiences": ("实习经历", "工作经历", "实践经历", "校园经历", "社会实践", "实习及工作经历", "工作及实习经历", "实习与工作经历", "个人经历", "任职经历"),
+    "projects": ("项目经历", "项目经验", "项目实践", "科研经历", "作品集", "项目", "项目作品"),
     "skills": ("专业技能", "技能特长", "技能", "专业能力", "核心技能"),
     "certifications": ("证书", "资格", "语言能力"),
     "goals": ("求职意向", "求职目标", "职业目标", "意向岗位"),
 }
+
+# 经历/项目条目中的"内容行"特征：动作词开头或长句
+_ACTION_WORDS = re.compile(r"^(负责|参与|使用|完成|协助|独立|通过|基于|实现|优化|设计|开发|搭建|跟进|撰写|输出|推动|进行|主导|深度|熟练|掌握|了解|熟悉|统筹|策划|执行|分析|调研|访谈|落地|上线|迭代|维护|支持|协作|组织|管理|运营|测试|解决|撰写过|负责过)")
+_COMPANY_MARKER = re.compile(r"(有限公司|有限责任公司|公司|集团|科技|网络|信息|软件|研究院|实验室|工作室|事业部|银行|证券|大学|医院|基金|媒体|文化|教育)")
+
+
+def _is_content_line(line):
+    """内容行：动作词开头 / 长句 / 含句号分号长内容。"""
+    if len(line) > 60:
+        return True
+    if _ACTION_WORDS.search(line):
+        return True
+    if ("。" in line or "；" in line or "；" in line) and len(line) > 20:
+        return True
+    return False
+
+
+def _split_company_title(prefix):
+    """把 '公司名 职位' 拆成 (company, title)。优先符号分隔，其次公司标记词，再空格启发式。"""
+    parts = [p.strip() for p in re.split(r"\s*(?:\||｜|·|–|—)\s*", prefix) if p.strip()]
+    if len(parts) >= 2:
+        return parts[0], " ".join(parts[1:])
+    m = None
+    for match in _COMPANY_MARKER.finditer(prefix):
+        m = match  # 取最后一个标记词（公司名通常以"有限公司/科技/集团"结尾）
+    if m:
+        company = prefix[:m.end()].strip(" |｜·,，-—")
+        title = prefix[m.end():].strip(" |｜·,，-—")
+        return company or prefix, title
+    space_parts = prefix.split()
+    if len(space_parts) >= 2 and len(space_parts[0]) <= 6 and len(space_parts[1]) <= 20:
+        return space_parts[0], " ".join(space_parts[1:])
+    return prefix, ""
 
 
 def _clean_line(line):
@@ -114,30 +147,39 @@ def _extract_entries(section, kind):
     date = re.compile(r"(?:19|20)\d{2}(?:[.年/-]\d{1,2})?\s*(?:-|—|至|~|/)\s*(?:(?:19|20)\d{2}(?:[.年/-]\d{1,2})?|至今|现在)")
     starts = [index for index, line in enumerate(section) if date.search(line)]
     if not starts:
-        # 无日期格式：按"标题行特征"分段（公司/项目名 与 职责要点 区分）
+        # 无日期格式：标题行（非内容行、短行）作为条目起点；上一行是内容行时开始新条目
         starts = []
-        company_marker = re.compile(r"(?:有限公司|有限责任公司|公司|集团|科技|网络|信息|软件|研究院|实验室|工作室|事业部|团队)")
         for index, line in enumerate(section):
-            is_title = (
-                company_marker.search(line)
-                or (kind == "projects" and (re.match(r"^[^，。；]{2,30}项目", line) or "项目" in line and len(line) <= 40))
-                or (index == 0 and len(line) <= 40)
-            )
-            prev_is_content = index > 0 and len(section[index - 1]) > 40
-            if is_title and (index == 0 or prev_is_content):
+            if _is_content_line(line):
+                continue
+            if index == 0 or _is_content_line(section[index - 1]):
                 starts.append(index)
         if not starts:
             starts = [0]
     for number, start in enumerate(starts):
         block = section[start:(starts[number + 1] if number + 1 < len(starts) else len(section))]
-        heading, period = block[0], _period(block[0])
-        prefix = date.sub("", heading).strip(" |｜·,，-—")
-        points = [_clean_line(line.lstrip("•·-—0123456789.、 ")) for line in block[1:] if len(_clean_line(line)) > 3]
-        if kind == "experiences":
-            parts = [part.strip() for part in re.split(r"\s*(?:\||｜|·|–|—)\s*", prefix) if part.strip()]
-            entry = {"company": (parts[0] if parts else "")[:80], "title": (parts[1] if len(parts) > 1 else prefix)[:80], "period": period, "points": points[:6]}
+        # 无日期时：合并连续的标题行作 heading，动作词/长句行作要点
+        if not any(date.search(line) for line in block):
+            heading_lines, points = [], []
+            for line in block:
+                if _is_content_line(line):
+                    points.append(_clean_line(line.lstrip("•·-—0123456789.、 ")))
+                else:
+                    heading_lines.append(line)
+            heading = _clean_line(" ".join(heading_lines))
+            period = ""
         else:
-            entry = {"title": prefix[:100], "period": period, "points": points[:6]}
+            heading, period = block[0], _period(block[0])
+            heading = date.sub("", heading).strip(" |｜·,，-—")
+            points = [_clean_line(line.lstrip("•·-—0123456789.、 ")) for line in block[1:] if len(_clean_line(line)) > 3]
+        points = [p for p in points if len(p) > 2][:6]
+        if not heading:
+            continue
+        if kind == "experiences":
+            company, title = _split_company_title(heading)
+            entry = {"company": company[:80], "title": (title or heading)[:80], "period": period, "points": points}
+        else:
+            entry = {"title": heading[:100], "period": period, "points": points}
         if entry.get("title") and not any(item.get("title") == entry.get("title") and item.get("period") == period for item in entries):
             entries.append(entry)
             sources.extend(block)

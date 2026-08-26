@@ -190,3 +190,68 @@ def test_text_import_builds_plan_and_draft(monkeypatch):
         row = conn.execute("SELECT * FROM resume_import_drafts WHERE user_id=? AND status='pending'", (uid,)).fetchone()
         conn.close()
     assert row is not None
+
+
+def test_multi_experience_without_dates_segments_correctly(monkeypatch):
+    """无日期多条目（公司+职位分行）应全部识别，company/title 拆开。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """王五
+邮箱：ww@example.com
+实习经历
+字节跳动
+产品运营实习生
+负责用户增长
+腾讯科技
+数据分析实习生
+负责埋点统计
+"""
+    data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
+    assert len(data["experiences"]) == 2
+    companies = [e["company"] for e in data["experiences"]]
+    assert "字节跳动" in companies[0]
+    assert "腾讯科技" in companies[1]
+    assert data["experiences"][0]["title"] == "产品运营实习生"
+    assert data["experiences"][1]["title"] == "数据分析实习生"
+
+
+def test_variant_section_title_project_practice(monkeypatch):
+    """变体标题"项目实践"也应识别。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """陈二
+邮箱：ce@example.com
+项目实践
+AI 简历助手
+使用 Python 开发
+"""
+    data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
+    assert len(data["projects"]) == 1
+    assert "简历助手" in data["projects"][0]["title"]
+
+
+def test_company_title_split_with_space(monkeypatch):
+    """空格分隔的'公司名 职位'应拆开（无公司标记词）。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """李四
+邮箱：ls@example.com
+工作经历
+字节跳动 产品运营实习生
+负责用户增长与活动策划
+"""
+    data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
+    assert data["experiences"][0]["company"] == "字节跳动"
+    assert data["experiences"][0]["title"] == "产品运营实习生"
+
+
+def test_company_title_split_with_date_and_suffix(monkeypatch):
+    """日期开头 + '腾讯科技有限公司 职位'：company 应含完整后缀。"""
+    monkeypatch.setattr(resume_extractor, "llm_available", lambda: False)
+    text = """赵六
+邮箱：zl@example.com
+实习经历
+2023.06-2023.09 腾讯科技有限公司 产品运营实习生
+负责短视频内容运营
+"""
+    data = resume_extractor.extract_profile_from_resume(text, 1)["extracted"]
+    assert data["experiences"][0]["company"] == "腾讯科技有限公司"
+    assert data["experiences"][0]["title"] == "产品运营实习生"
+    assert data["experiences"][0]["period"] == "2023.06-2023.09"
