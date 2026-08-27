@@ -20,6 +20,17 @@ CareerPilot-CN 是 [AI Job Search](https://github.com/MadsLorentzen/ai-job-searc
 
 > **Web 多用户版**：项目现已提供可部署的 Web 界面，支持注册/登录/游客体验、岗位匹配评分、简历与求职信生成、面试准备和申请进度管理。详见 [`web/README.md`](web/README.md) 与 [`DEPLOY.md`](DEPLOY.md)，本地启动 `python web/server.py`。
 
+<div align="center">
+
+## 🌐 在线访问（网站版）
+
+| 入口 | 地址 |
+|---|---|
+| **CareerPilot 主站**（岗位搜索/评分/简历库/AI 助手） | **[http://111.230.228.15:8000](http://111.230.228.15:8000)** |
+| **投递进度看板**（JobHuntBot 本地看板） | **[http://111.230.228.15:8420/dashboard.html](http://111.230.228.15:8420/dashboard.html)** |
+
+</div>
+
 <p align="center">
   <a href="https://trendshift.io/repositories/43622?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-43622" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/43622/daily" alt="MadsLorentzen%2Fai-job-search | Trendshift" width="250" height="55"/></a>
 </p>
