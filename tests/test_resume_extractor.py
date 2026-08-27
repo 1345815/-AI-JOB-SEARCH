@@ -615,11 +615,11 @@ def test_extract_campus_info(monkeypatch):
 
 def test_ext_token_lifecycle(monkeypatch):
     """插件令牌：生成幂等 / 轮换失效 / 坏 token 拒绝 / 脱敏档案。"""
-    import server as server_mod
+    import server as server_mod, time as _t
     server_mod.init_db()
     with server_mod._DB_LOCK:
         conn = server_mod.db()
-        cur = conn.execute("INSERT INTO users (username, password_hash) VALUES (?,?)", ("extlife", "x"))
+        cur = conn.execute("INSERT INTO users (username, password_hash) VALUES (?,?)", ("extlife_" + str(_t.time_ns()), "x"))
         uid = cur.lastrowid; conn.commit(); conn.close()
     t1 = server_mod.get_ext_token(uid)
     assert t1.startswith("cp_ext_")
@@ -631,3 +631,24 @@ def test_ext_token_lifecycle(monkeypatch):
     pf = server_mod.profile_for_ext({"profile_json": '{"name":"马育琪","phone":"1","education":[{"school":"中原工学院","degree":"本科","detail":"飞行器"}]}'})
     assert pf["name"] == "马育琪" and pf["school"] == "中原工学院" and pf["degree"] == "本科"
     assert "profile_json" not in str(pf)  # 不含敏感字段
+
+
+def test_mock_interview(monkeypatch):
+    """模拟面试：AI 出题（5 题分层）/无 AI 返回 None/AI 点评/兜底/空回答。"""
+    import server as server_mod
+    job = {"title": "AI 应用研发实习生", "company": "转转", "description": "LLM Agent 开发"}
+    profile = {"name": "马育琪", "skills": {"strong": ["Python"]}, "projects": [{"title": "CareerPilot"}], "experiences": []}
+    monkeypatch.setattr(server_mod, "llm_available", lambda: True)
+    monkeypatch.setattr(server_mod, "llm_chat", lambda m, system=None:
+        '[{"q":"请讲 Multi-Agent 平台架构","hint":"STAR 突出编排"},{"q":"如何保证输出稳定","hint":"schema"},{"q":"为什么选我们","hint":"JD"},{"q":"技术难点","hint":"方案"},{"q":"Prompt 优化","hint":"迭代"}]')
+    qa = server_mod.generate_interview_qa(job, profile)
+    assert qa and len(qa) == 5 and all(i.get("q") and i.get("hint") for i in qa)
+    monkeypatch.setattr(server_mod, "llm_available", lambda: False)
+    assert server_mod.generate_interview_qa(job, profile) is None
+    monkeypatch.setattr(server_mod, "llm_available", lambda: True)
+    monkeypatch.setattr(server_mod, "llm_chat", lambda m, system=None: '{"points":["结构清晰"],"gaps":["缺数据"],"suggestion":"补量化"}')
+    r = server_mod.analyze_interview_answer("讲项目", "我做了平台", job, profile)
+    assert r["points"] == ["结构清晰"] and r["gaps"] == ["缺数据"]
+    monkeypatch.setattr(server_mod, "llm_available", lambda: False)
+    assert "STAR" in server_mod.analyze_interview_answer("讲项目", "我做了平台")["suggestion"]
+    assert "先写下" in server_mod.analyze_interview_answer("q", "")["suggestion"]

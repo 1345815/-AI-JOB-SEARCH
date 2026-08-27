@@ -2356,6 +2356,76 @@ STAR_EXAMPLES = [
 ]
 
 
+def generate_interview_qa(job, profile=None):
+    """AI 生成针对岗位 + 档案的模拟面试问题（含回答要点），失败返回 None。"""
+    profile = profile or {}
+    if not llm_available():
+        return None
+    job_text = _text_of(job)[:4000]
+    compact = {
+        "姓名": profile.get("name", "候选人"),
+        "求职方向": profile.get("status", ""),
+        "技能": (profile.get("skills") or {}).get("strong", [])[:8],
+        "项目": [p.get("title", "") for p in profile.get("projects", [])][:3],
+        "经历": [e.get("title", "") + "@" + e.get("company", "") for e in profile.get("experiences", [])][:3],
+    }
+    system = (
+        "你是资深技术面试官。基于目标岗位 JD 和候选人档案，设计 5 个高概率被问到的面试问题。"
+        "要求：问题结合 JD 核心要求与候选人真实经历（问其做过的事，不要求编造）；"
+        "难度分层（基础 2 个 / 深挖 2 个 / 开放 1 个）；每题附 30-50 字回答要点（含 STAR 思路或关键得分点）。"
+        '输出严格 JSON 数组（不要代码块）：[{"q": "问题", "hint": "回答要点"}...]。'
+    )
+    try:
+        content = llm_chat([{"role": "user", "content": "【岗位 JD】\n%s\n\n【候选人档案】\n%s" % (job_text, json.dumps(compact, ensure_ascii=False))}], system=system)
+        if not content:
+            return None
+        content = content.strip().strip("`")
+        if content.startswith("json"):
+            content = content[4:]
+        data = json.loads(content)
+        if not isinstance(data, list):
+            data = data.get("questions") or []
+        qa = []
+        for d in data[:6]:
+            if isinstance(d, dict) and str(d.get("q", "")).strip():
+                qa.append({"q": str(d["q"]).strip()[:200], "hint": str(d.get("hint", "")).strip()[:150]})
+        return qa or None
+    except Exception:
+        return None
+
+
+def analyze_interview_answer(question, answer, job=None, profile=None):
+    """AI 点评面试回答：优点/不足/改进建议 + 示范要点。失败返回本地点评。"""
+    if not question or not answer or not answer.strip():
+        return {"points": [], "gaps": [], "suggestion": "先写下你的回答再点评。"}
+    if llm_available():
+        system = (
+            "你是面试教练。点评候选人对面试问题的回答。"
+            '输出严格 JSON（不要代码块）：{"points": ["1-2条优点"], "gaps": ["1-2条不足"], '
+            '"suggestion": "50字内改进建议与示范思路"}。'
+            "优点和不足都要具体，不要空话。"
+        )
+        try:
+            content = llm_chat([{"role": "user", "content": "【面试问题】\n%s\n\n【我的回答】\n%s" % (question[:500], answer[:3000])}], system=system)
+            if content:
+                content = content.strip().strip("`")
+                if content.startswith("json"):
+                    content = content[4:]
+                data = json.loads(content)
+                return {
+                    "points": [str(s) for s in data.get("points", [])[:2]],
+                    "gaps": [str(g) for g in data.get("gaps", [])[:2]],
+                    "suggestion": str(data.get("suggestion", ""))[:120],
+                }
+        except Exception:
+            pass
+    return {
+        "points": ["已作答"],
+        "gaps": ["AI 点评不可用，可对照回答要点自查"],
+        "suggestion": "参考要点中的 STAR 思路：情境 → 任务 → 行动 → 结果，用数据支撑结论。",
+    }
+
+
 def generate_interview_prep(job, profile=None):
     profile = profile or {}
     job_text = _text_of(job)
@@ -3800,6 +3870,27 @@ class Handler(BaseHTTPRequestHandler):
                 conn.commit()
                 conn.close()
             self._send(200, {"job_id": job["id"], "content": content})
+            return
+
+        if head == "interview" and len(parts) >= 2 and parts[1] == "qa" and method == "POST":
+            body = self._json_body()
+            job = get_job((body or {}).get("job_id", ""))
+            if not job:
+                self._send(404, {"ok": False, "error": "岗位不存在"})
+                return
+            profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
+            qa = generate_interview_qa(job, profile)
+            self._send(200, {"ok": True, "questions": qa or [], "note": "" if qa else "AI 未启用或生成失败，请检查 AI 配置"})
+            return
+
+        if head == "interview" and len(parts) >= 2 and parts[1] == "analyze" and method == "POST":
+            body = self._json_body()
+            question = (body or {}).get("question") or ""
+            answer = (body or {}).get("answer") or ""
+            job = get_job((body or {}).get("job_id", "")) if (body or {}).get("job_id") else None
+            profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
+            result = analyze_interview_answer(question, answer, job, profile)
+            self._send(200, {"ok": True, "data": result})
             return
 
         if head == "chat" and method == "POST":

@@ -1407,11 +1407,13 @@
 
     el("content").innerHTML =
       '<div class="content-inner">' +
-      '<div class="page-head"><div><h1>面试准备</h1><p>针对目标岗位生成可背诵、可演练的完整准备包。</p></div></div>' +
+      '<div class="page-head"><div><h1>面试准备</h1><p>针对目标岗位生成可背诵、可演练的完整准备包，并可进入模拟面试。</p></div></div>' +
       '<div class="panel mb-14"><div class="panel-body"><div class="flex" style="flex-wrap:wrap;gap:10px">' +
       '<label class="field" style="flex:1;min-width:260px"><span>目标岗位</span><select id="interviewJob" style="min-height:36px;border:1px solid var(--border-strong);border-radius:6px;padding:0 10px">' + options + "</select></label>" +
       '<button class="btn btn-primary" id="interviewGenerate" style="align-self:flex-end">生成准备包</button>' +
+      '<button class="btn" id="interviewMock" style="align-self:flex-end">🎭 模拟面试</button>' +
       "</div></div></div>" +
+      '<div id="mockPanel"></div>' +
       preview +
       "</div>";
 
@@ -1421,6 +1423,68 @@
       var job = state.jobs.find(function (j) { return j.id === sel.value; });
       if (job) prepareInterview(job);
     });
+    el("interviewMock").addEventListener("click", function () {
+      var job = state.jobs.find(function (j) { return j.id === sel.value; });
+      if (!job) { toast("请先选择岗位", "error"); return; }
+      startMockInterview(job);
+    });
+  }
+
+  async function startMockInterview(job) {
+    var panel = el("mockPanel");
+    panel.innerHTML = '<div class="panel mb-14"><div class="panel-head"><strong>🎭 模拟面试 · ' + esc(job.company) + '</strong><span class="sub">AI 出题 → 你作答 → AI 点评</span></div><div class="panel-body"><div class="loading"><div class="spinner"></div></div></div></div>';
+    try {
+      var res = await api("interview/qa", { method: "POST", body: { job_id: job.id } });
+      var qa = (res && res.questions) || [];
+      if (!qa.length) {
+        panel.innerHTML = '<div class="panel mb-14"><div class="panel-head"><strong>🎭 模拟面试</strong></div><div class="panel-body"><div class="empty"><strong>无法生成题目</strong><span>' + esc((res && res.note) || "请检查 AI 配置") + "</span></div></div></div>";
+        return;
+      }
+      state.mockQa = qa; state.mockIdx = 0;
+      renderMockQuestion();
+    } catch (e) {
+      panel.innerHTML = '<div class="panel mb-14"><div class="panel-head"><strong>🎭 模拟面试</strong></div><div class="panel-body"><div class="empty"><strong>加载失败</strong><span>' + esc(e.message) + "</span></div></div></div>";
+    }
+  }
+
+  function renderMockQuestion() {
+    var qa = state.mockQa || [];
+    var idx = state.mockIdx || 0;
+    var panel = el("mockPanel");
+    if (idx >= qa.length) {
+      panel.innerHTML = '<div class="panel mb-14"><div class="panel-head"><strong>🎭 模拟面试完成</strong></div><div class="panel-body"><div class="empty"><strong>全部 ' + qa.length + ' 题已演练</strong><span>对照准备包里的岗位要点，继续打磨你的表达。</span><button class="btn btn-primary mt-8" data-mock-restart>再来一轮</button></div></div></div>';
+      var rb = panel.querySelector("[data-mock-restart]");
+      if (rb) rb.addEventListener("click", function () { state.mockIdx = 0; renderMockQuestion(); });
+      return;
+    }
+    var item = qa[idx];
+    panel.innerHTML = '<div class="panel mb-14"><div class="panel-head"><strong>🎭 模拟面试 · 第 ' + (idx + 1) + '/' + qa.length + ' 题</strong>' +
+      '<span class="sub">' + esc(item.hint || "") + '</span></div><div class="panel-body">' +
+      '<div class="doc-preview"><strong>' + esc(item.q) + "</strong></div>" +
+      '<label class="field mt-8"><span>你的回答</span><textarea id="mockAnswer" rows="5" placeholder="写下你的回答（建议用 STAR 结构：情境-任务-行动-结果）" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border-strong);border-radius:8px"></textarea></label>' +
+      '<div id="mockFeedback"></div>' +
+      '<div class="flex mt-8" style="gap:8px"><button class="btn btn-primary" id="mockSubmit">提交并点评</button>' +
+      '<button class="btn" id="mockSkip">跳过</button></div></div></div>';
+    panel.querySelector("#mockSubmit").addEventListener("click", async function () {
+      var answer = panel.querySelector("#mockAnswer").value.trim();
+      if (!answer) { toast("先写下回答再提交", "error"); return; }
+      var btn = panel.querySelector("#mockSubmit");
+      btn.disabled = true; btn.textContent = "点评中…";
+      try {
+        var res = await api("interview/analyze", { method: "POST", body: { question: item.q, answer: answer, job_id: state.selectedJobId } });
+        var d = (res && res.data) || {};
+        panel.querySelector("#mockFeedback").innerHTML =
+          '<div class="privacy-block mt-8"><strong>AI 点评</strong>' +
+          '<p class="muted">✅ 优点：' + esc((d.points || []).join("；") || "无") + "</p>" +
+          '<p class="muted">⚠️ 不足：' + esc((d.gaps || []).join("；") || "无") + "</p>" +
+          '<p class="muted">💡 建议：' + esc(d.suggestion || "") + "</p></div>";
+        state.mockIdx = idx + 1;
+        btn.textContent = "下一题";
+        btn.disabled = false;
+        btn.addEventListener("click", function () { renderMockQuestion(); }, { once: true });
+      } catch (e) { toast("点评失败：" + e.message, "error"); btn.disabled = false; btn.textContent = "提交并点评"; }
+    });
+    panel.querySelector("#mockSkip").addEventListener("click", function () { state.mockIdx = idx + 1; renderMockQuestion(); });
   }
 
   async function prepareInterview(job) {
