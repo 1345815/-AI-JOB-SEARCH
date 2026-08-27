@@ -1626,7 +1626,8 @@
     el("content").innerHTML =
       '<div class="content-inner">' +
       '<div class="page-head"><div><h1>简历库</h1><p>把你之前的所有简历都放进来，岗位评分、简历生成和求职信会自动使用这些资料。资料只保存在你的账号下。</p></div>' +
-      '<div class="page-actions"><div class="resume-profile-badge"><span>档案完成度</span><b>' + completionPct + '%</b></div></div></div>' +
+      '<div class="page-actions"><div class="resume-profile-badge"><span>档案完成度</span><b>' + completionPct + '%</b></div>' +
+      '<button class="btn btn-primary" id="openResumeEditorBtn">🎨 制作简历</button></div></div>' +
       '<div class="panel mb-14"><div class="panel-head"><strong>上传简历</strong><span class="sub">支持 PDF / DOCX / TXT / MD，每份 ≤10MB，可一次多选</span></div>' +
       '<div class="panel-body">' +
       '<div class="upload-zone" id="uploadZone"><input type="file" id="resumeFile" accept=".pdf,.docx,.txt,.md" multiple hidden>' +
@@ -1766,6 +1767,29 @@
     });
     document.querySelectorAll('.remove-experience').forEach(function (button) { button.addEventListener('click', function () { state.profile.experiences.splice(Number(button.dataset.index), 1); renderProfile(); }); });
     document.querySelectorAll('.remove-project').forEach(function (button) { button.addEventListener('click', function () { state.profile.projects.splice(Number(button.dataset.index), 1); renderProfile(); }); });
+    var editorBtn = el('openResumeEditorBtn');
+    if (editorBtn) editorBtn.addEventListener('click', function () {
+      var p = normalizeProfileForEditor(state.profile);
+      if (typeof openResumeEditor === "function") openResumeEditor(p);
+      else toast("简历编辑器加载失败，请刷新页面", "error");
+    });
+  }
+
+  function normalizeProfileForEditor(p) {
+    return {
+      name: p.name || "", email: p.email || "", phone: p.phone || "", city: p.city || "",
+      github: (p.links && p.links.github) || p.github || "", status: p.status || "",
+      notes: p.notes || p.summary || "",
+      education: (p.education || []).map(function (e) { return { school: e.school, degree: e.degree, period: e.period, detail: e.detail }; }),
+      experiences: (p.experiences || []).map(function (e) {
+        return { company: e.company, title: e.title || e.role, role: e.role, period: e.period || [e.start_date, e.end_date].filter(Boolean).join(" - "), points: e.points || (e.description ? [e.description] : []) };
+      }),
+      projects: (p.projects || []).map(function (pr) {
+        return { title: pr.name || pr.title, role: pr.role, tech: pr.tech, period: pr.period, points: pr.points || (pr.description ? [pr.description] : []) };
+      }),
+      skills: p.skills || {},
+      certifications: p.certifications || p.awards || [],
+    };
   }
 
   function bindUploadZone() {
