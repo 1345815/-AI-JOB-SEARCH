@@ -276,6 +276,43 @@
     });
     updateProfileBanner();
     if (!state.profile.onboarding_completed && !sessionStorage.getItem("careerpilot_onboarding_later")) setTimeout(openOnboarding, 350);
+    else if (!localStorage.getItem("cp_tour_done")) setTimeout(openTour, 900);
+  }
+
+  var TOUR_STEPS = [
+    { icon: "🎯", title: "欢迎来到 CareerPilot", body: "你的 AI 求职助手。它帮你完成一条完整求职线：<b>找真实岗位 → 判断值不值得投 → 一键生成材料 → 投递 → 跟进</b>。所有数据只保存在你自己的服务器。" },
+    { icon: "📄", title: "第 1 步：把简历放进来", body: "去「简历库」上传你的简历（PDF/DOCX/文本），AI 会自动识别学校、专业、实习、项目、技能。之后评分、定制简历、填网申都用这份档案。" },
+    { icon: "🔍", title: "第 2 步：找岗位看匹配", body: "去「岗位搜索」粘贴招聘链接或手动录入，系统给出匹配评分和硬门槛提示。点开岗位看到 5 步行动线，点「✨ 一键生成材料包」备好投递三件套。" },
+    { icon: "🚀", title: "第 3 步：投递与跟进", body: "投递后在「申请进度」记录状态。每天打开「总览」，系统提醒你今天该跟进谁、哪些岗位快截止。面试前用「面试准备」的 AI 模拟面试练手。" },
+  ];
+
+  function openTour() {
+    var root = el("tourRoot");
+    if (!root) return;
+    var idx = 0;
+    function render() {
+      var s = TOUR_STEPS[idx];
+      root.innerHTML =
+        '<div class="tour-overlay"><div class="tour-card">' +
+        '<div class="tour-hero"><div class="tour-icon">' + s.icon + "</div>" +
+        '<div class="tour-steps">' + TOUR_STEPS.map(function (_, i) { return '<div class="tour-dot' + (i === idx ? " active" : "") + '"></div>'; }).join("") + "</div></div>" +
+        '<div class="tour-body"><h2>' + s.title + "</h2><p>" + s.body + "</p></div>" +
+        '<div class="tour-foot"><button class="btn-skip" id="tourSkip">跳过引导</button>' +
+        '<button class="btn btn-primary" id="tourNext">' + (idx === TOUR_STEPS.length - 1 ? "开始使用 🎉" : "下一步 →") + "</button></div></div></div>";
+      var skip = root.querySelector("#tourSkip");
+      if (skip) skip.addEventListener("click", close);
+      var next = root.querySelector("#tourNext");
+      if (next) next.addEventListener("click", function () {
+        idx++;
+        if (idx >= TOUR_STEPS.length) { close(); localStorage.setItem("cp_tour_done", "1"); }
+        else render();
+      });
+    }
+    function close() {
+      root.innerHTML = "";
+      localStorage.setItem("cp_tour_done", "1");
+    }
+    render();
   }
 
   function openOnboarding() {
@@ -2843,6 +2880,7 @@
     el("profileBannerBtn").addEventListener("click", function () { location.hash = "#/profile"; });
     el("userMenuBtn").addEventListener("click", function (e) { e.stopPropagation(); el("userDropdown").classList.toggle("hide"); });
     el("menuProfile").addEventListener("click", function () { el("userDropdown").classList.add("hide"); location.hash = "#/profile"; });
+    el("menuTour").addEventListener("click", function () { el("userDropdown").classList.add("hide"); openTour(); });
     el("notifToggle").addEventListener("click", function (e) {
       e.stopPropagation();
       var dd = el("notifDropdown");

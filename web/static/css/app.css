@@ -963,3 +963,35 @@ body { background: radial-gradient(circle at 85% -10%, rgba(14,143,123,.08), tra
 .data-table td { padding: 10px 12px; border-bottom: 1px solid var(--border, #eef2f7); vertical-align: top; }
 .data-table tbody tr:hover { background: var(--bg-soft, #f8fafc); }
 .data-table .icon-btn { color: #dc2626; }
+
+/* ===== UI 增强：视觉层次 ===== */
+.dashboard-hero { background: linear-gradient(135deg, #eff6ff 0%, #f5f3ff 55%, #fdf2f8 100%); border: 1px solid #e0e7ff; border-radius: 14px; }
+.hero-action .btn-primary { box-shadow: 0 4px 12px rgba(37, 99, 235, .25); }
+.panel { border-radius: 12px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 2px 8px rgba(15, 23, 42, .04); }
+.panel:hover { box-shadow: 0 2px 4px rgba(15, 23, 42, .05), 0 6px 16px rgba(15, 23, 42, .06); }
+.nav-item.active { background: linear-gradient(90deg, rgba(37, 99, 235, .12), rgba(37, 99, 235, .04)); border-left: 3px solid #2563eb; }
+.nav-item .nav-sub { display: block; font-size: 10.5px; color: var(--text-muted, #64748b); margin-top: 1px; font-weight: 400; }
+.nav-item.active .nav-sub { color: #3b82f6; }
+.page-head h1 { font-size: 20px; }
+.eyebrow { font-size: 11px; letter-spacing: 1.5px; color: #2563eb; font-weight: 600; }
+.stat-card { border-left: 3px solid #2563eb; }
+.detail-hero { border-radius: 12px; }
+.btn { transition: transform .08s ease, box-shadow .12s ease; }
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: linear-gradient(135deg, #2563eb, #3b82f6); border: none; box-shadow: 0 2px 8px rgba(37, 99, 235, .2); }
+.empty svg { width: 56px; height: 56px; color: #c7d2fe; }
+.upload-zone { border: 2px dashed #c7d2fe; background: linear-gradient(180deg, #f8faff, #eef2ff); border-radius: 12px; }
+
+/* ===== 新手引导 Tour ===== */
+.tour-overlay { position: fixed; inset: 0; z-index: 2000; background: rgba(15, 23, 42, .5); display: flex; align-items: center; justify-content: center; }
+.tour-card { width: min(560px, 92vw); background: #fff; border-radius: 16px; box-shadow: 0 24px 60px rgba(0, 0, 0, .25); overflow: hidden; }
+.tour-hero { padding: 34px 30px 26px; background: linear-gradient(135deg, #eff6ff, #f5f3ff 60%, #fdf2f8); text-align: center; }
+.tour-icon { width: 64px; height: 64px; margin: 0 auto 12px; border-radius: 18px; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 30px; box-shadow: 0 4px 14px rgba(37, 99, 235, .18); }
+.tour-body { padding: 22px 30px 10px; }
+.tour-body h2 { margin: 0 0 6px; font-size: 17px; }
+.tour-body p { margin: 0; color: #64748b; font-size: 13.5px; line-height: 1.7; }
+.tour-steps { display: flex; gap: 6px; justify-content: center; padding: 14px 0 0; }
+.tour-dot { width: 8px; height: 8px; border-radius: 50%; background: #d3d1c7; }
+.tour-dot.active { background: #2563eb; width: 20px; border-radius: 4px; }
+.tour-foot { display: flex; justify-content: space-between; align-items: center; padding: 14px 30px 20px; }
+.tour-foot .btn-skip { border: none; background: none; color: #94a3b8; cursor: pointer; font-size: 13px; }
