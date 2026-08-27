@@ -652,3 +652,22 @@ def test_mock_interview(monkeypatch):
     monkeypatch.setattr(server_mod, "llm_available", lambda: False)
     assert "STAR" in server_mod.analyze_interview_answer("讲项目", "我做了平台")["suggestion"]
     assert "先写下" in server_mod.analyze_interview_answer("q", "")["suggestion"]
+
+
+def test_job_kit_generation(monkeypatch):
+    """投递材料包：招呼语+简历+求职信三件套兜底生成（无 AI 也可用）。"""
+    import server as server_mod
+    server_mod.init_db()
+    import json as _json, time as _t
+    with server_mod._DB_LOCK:
+        conn = server_mod.db()
+        conn.execute("INSERT INTO users (username, password_hash) VALUES (?,?)", ("kit_" + str(_t.time_ns()), "x"))
+        conn.execute("INSERT INTO jobs (id, title, company, description, requirements, source) VALUES (?,?,?,?,?,?)",
+                     ("kitjob_" + str(_t.time_ns()), "AI 实习生", "转转", "LLM Agent 开发", '["Python"]', "local"))
+        conn.commit(); conn.close()
+    job = {"title": "AI 实习生", "company": "转转", "description": "LLM Agent 开发", "requirements": ["Python"]}
+    profile = {"name": "马育琪", "phone": "1", "skills": {"strong": ["Python"]}, "experiences": [], "projects": [], "education": []}
+    monkeypatch.setattr(server_mod, "llm_available", lambda: False)
+    assert "马育琪" in server_mod.generate_greeting(job, profile)
+    assert "个人简历" in server_mod.generate_resume(job, profile)
+    assert "求职信" in server_mod.generate_cover_letter(job, profile)

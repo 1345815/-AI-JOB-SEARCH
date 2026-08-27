@@ -3204,6 +3204,40 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "sources": health_snapshot()})
             return
 
+        # 投递材料包：一键生成 招呼语 + 定制简历 + 求职信（同步，失败各自兜底）
+        if head == "jobs" and len(parts) >= 2 and parts[1] == "kit" and method == "POST":
+            body = self._json_body()
+            job_id = (body or {}).get("job_id")
+            job = get_job(job_id) if job_id else None
+            if not job:
+                self._send(404, {"ok": False, "error": "岗位不存在"})
+                return
+            profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
+            if profile_is_empty(profile):
+                self._send(400, {"ok": False, "error": "请先在「个人资料」中完善档案再生成材料包"})
+                return
+            import time as _t
+            kinds = [("greeting", generate_greeting), ("resume", lambda j, p: generate_resume(j, p)), ("cover_letter", lambda j, p: generate_cover_letter(j, p))]
+            results = []
+            with _DB_LOCK:
+                conn = db()
+                for kind, fn in kinds:
+                    try:
+                        content = fn(job, profile)
+                    except Exception:
+                        content = ""
+                    if not content:
+                        continue
+                    cur = conn.execute(
+                        "INSERT INTO documents (user_id, job_id, kind, content, created_at) VALUES (?,?,?,?,?)",
+                        (user["id"], job_id, kind, content, _t.strftime("%Y-%m-%d %H:%M")),
+                    )
+                    results.append({"kind": kind, "id": cur.lastrowid})
+                conn.commit()
+                conn.close()
+            self._send(200, {"ok": True, "items": results})
+            return
+
         if head == "teams" and method == "POST":
             body = self._json_body() or {}
             name = (body.get("name") or "").strip()

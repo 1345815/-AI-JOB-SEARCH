@@ -978,7 +978,12 @@
       '<div class="detail-summary">' + esc(needs ? "先到简历库上传简历，系统会结合你的技能、经历和职业目标进行五维匹配评分。" : (ev.summary || "")) + (ev.ai && ev.ai.used ? ' <span class="tag tag-accent">AI 深度校准</span>' : "") + "</div></div></div>" +
       (gateTags ? '<div class="detail-meta">' + gateTags + "</div>" : "") +
       "</div>" +
+      actionStepsHtml(job, ev, app) +
       '<div class="detail-sections">' +
+      '<div class="detail-section full"><h3>📦 投递材料包</h3><div class="text-mid muted">一键生成投递需要的三件套：招呼语 / 定制简历 / 求职信（AI 不可用时自动回退模板）。</div>' +
+      '<div class="flex mt-8" style="gap:8px;flex-wrap:wrap"><button class="btn btn-primary" data-action="kit" id="kitBtn">✨ 一键生成材料包</button>' +
+      '<div id="kitResults" class="flex" style="gap:8px;flex-wrap:wrap">' + (state.kitJobIds && state.kitJobIds.indexOf(job.id) >= 0 ? '<span class="tag tag-accent">✓ 已生成（可在文档库查看）</span>' : "") + '</div></div>' +
+      '<div id="kitStatus" class="muted text-sm mt-8"></div></div>' +
       '<div class="detail-section"><h3>下一步行动</h3><div class="text-mid">' + esc(nextAction(job, ev, app)) + '</div></div>' +
       (prefilter ? '<div class="detail-section"><h3>快速预筛（人工确认前）</h3><div class="text-mid"><span class="tag ' + (prefilter.status === "recommend" ? "tag-accent" : prefilter.status === "reject" ? "tag-danger" : "tag-warn") + '">' + esc(prefilter.label) + '</span> ' + esc((prefilter.reasons || []).join("；")) + '</div></div>' : '') +
       '<div class="detail-section"><h3>五维评估</h3>' + barChart(ev) + "</div>" +
@@ -996,14 +1001,29 @@
       "</div>" +
       '<div class="detail-actions">' +
       appBtn +
-      '<button class="btn" data-action="resume">生成简历</button>' +
-      '<button class="btn" data-action="cover">生成求职信</button>' +
-      '<button class="btn" data-action="greet">生成招呼语</button>' +
       '<button class="btn" data-action="interview">面试准备</button>' +
       (job.url ? '<a class="btn" target="_blank" rel="noopener" href="' + esc(job.url) + '">查看原帖</a>' : "") +
       '<button class="btn btn-danger" data-action="deleteJob">删除</button>' +
       "</div></div>"
     );
+  }
+
+  function actionStepsHtml(job, ev, app) {
+    var steps = [
+      { key: "seen", label: "看岗", done: true },
+      { key: "eval", label: "评估", done: ev && ev.overall > 0 },
+      { key: "materials", label: "材料", done: state.kitJobIds && state.kitJobIds.indexOf(job.id) >= 0 },
+      { key: "apply", label: "投递", done: !!app },
+      { key: "follow", label: "跟进", done: !!(app && app.follow_up_at) },
+    ];
+    var html = '<div class="action-steps" style="display:flex;gap:0;align-items:flex-start;padding:14px 20px 6px;background:var(--bg-soft,#f8fafc);border-top:1px solid var(--border,#eef2f7)">';
+    steps.forEach(function (s, i) {
+      html += '<div style="flex:1;text-align:center;position:relative">' +
+        (i > 0 ? '<div style="position:absolute;top:12px;left:-50%;width:100%;height:2px;background:' + (s.done ? "#16a34a" : "#d3d1c7") + '"></div>' : "") +
+        '<div style="width:24px;height:24px;margin:0 auto;border-radius:50%;background:' + (s.done ? "#16a34a" : "#fff") + ';border:2px solid ' + (s.done ? "#16a34a" : "#cbd5e1") + ';color:' + (s.done ? "#fff" : "#94a3b8") + ';font-size:12px;line-height:20px;text-align:center">' + (s.done ? "✓" : i + 1) + "</div>" +
+        '<div style="font-size:11px;margin-top:4px;color:' + (s.done ? "#166534" : "#64748b") + '">' + s.label + "</div></div>";
+    });
+    return html + "</div>";
   }
 
   function deadlineClass(deadline) {
@@ -1035,11 +1055,38 @@
         else if (action === "resume") resumeModePrompt(job);
         else if (action === "cover") generateDoc(job, "cover_letter");
         else if (action === "greet") generateDoc(job, "greeting");
+        else if (action === "kit") generateJobKit(job);
         else if (action === "interview") prepareInterview(job);
         else if (action === "openPipeline") { state.view = "pipeline"; location.hash = "#/pipeline"; }
         else if (action === "deleteJob") deleteJob(job);
       });
     });
+  }
+
+  async function generateJobKit(job) {
+    var btn = el("kitBtn");
+    var status = el("kitStatus");
+    var results = el("kitResults");
+    btn.disabled = true;
+    status.textContent = "生成中（招呼语 → 简历 → 求职信）…";
+    results.innerHTML = "";
+    try {
+      var res = await api("jobs/kit", { method: "POST", body: { job_id: job.id } });
+      var items = (res && res.items) || [];
+      if (!items.length) { status.textContent = "生成失败，请检查 AI 配置或稍后重试"; return; }
+      var names = { greeting: "招呼语", resume: "定制简历", cover_letter: "求职信" };
+      results.innerHTML = items.map(function (it) {
+        return '<a class="btn btn-sm btn-primary" href="/api/documents/download/' + it.id + '" target="_blank">' + esc(names[it.kind] || it.kind) + " ✓</a>";
+      }).join("");
+      status.textContent = "已生成 " + items.length + " 份材料，点击查看。投递后记得去「投递进度」记录。";
+      state.kitJobIds = state.kitJobIds || [];
+      if (state.kitJobIds.indexOf(job.id) < 0) state.kitJobIds.push(job.id);
+      if (state.view === "jobs") renderJobs();
+    } catch (e) {
+      status.textContent = "生成失败：" + e.message;
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   async function addApplication(job) {
