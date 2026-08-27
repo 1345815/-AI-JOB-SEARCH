@@ -31,6 +31,11 @@ def handle_cover_letter_generate(data):
     return _handle_doc(data, "cover_letter")
 
 
+def handle_greeting_generate(data):
+    """生成投递招呼语（greeting.generate）：input {job_id, profile}"""
+    return _handle_doc(data, "greeting")
+
+
 def _handle_doc(data, kind):
     server = _server()
     job_id = (data or {}).get("job_id")
@@ -41,6 +46,8 @@ def _handle_doc(data, kind):
     profile = server.normalize_profile(profile)
     if kind == "resume":
         content = server.generate_resume(job, profile)
+    elif kind == "greeting":
+        content = server.generate_greeting(job, profile)
     else:
         content = server.generate_cover_letter(job, profile)
     user_id = (data or {}).get("user_id")
@@ -94,6 +101,7 @@ def handle_search(data):
 HANDLERS = {
     "resume.generate": handle_resume_generate,
     "cover_letter.generate": handle_cover_letter_generate,
+    "greeting.generate": handle_greeting_generate,
     "interview.generate": handle_interview_generate,
     "search": handle_search,
 }

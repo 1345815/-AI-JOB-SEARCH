@@ -1884,6 +1884,56 @@ def generate_resume(job, profile=None):
     return "\n".join(lines)
 
 
+def generate_greeting_ai(job, profile):
+    """AI 投递招呼语：像真人 IM，60-110 字，围绕 JD 独特点，不编造。失败返回 None。"""
+    job_text = _text_of(job)[:3000]
+    name = profile.get("name", "我")
+    compact = {
+        "姓名": name,
+        "求职意向": profile.get("status", ""),
+        "城市": profile.get("city", ""),
+        "技能": (profile.get("skills") or {}).get("strong", [])[:5],
+        "项目": [p.get("title", "") for p in profile.get("projects", [])][:3],
+        "经历": [e.get("title", "") + "@" + e.get("company", "") for e in profile.get("experiences", [])][:3],
+    }
+    system = (
+        "你是求职者，需要给目标公司的 HR 发送一条中文打招呼消息。"
+        "硬性要求：像真人随手发出的 IM 消息（Boss直聘/微信风格），绝不是求职信或公文；"
+        "字数 60-110，最多 3 个短句；围绕岗位 JD 中最独特、最具体的一点展开（技术栈/项目/方向均可），"
+        "不复述职位名称或整段 JD；只使用我提供的档案信息，禁止编造经历、技能或头衔；"
+        "语气自然、简短、有分寸，不要感叹号堆砌，不要问句轰炸。"
+    )
+    user = "【目标岗位】\n%s\n\n【我的真实背景】\n%s" % (job_text, json.dumps(compact, ensure_ascii=False))
+    try:
+        return llm_chat([{"role": "user", "content": user}], system=system)
+    except Exception:
+        return None
+
+
+def generate_greeting(job, profile=None):
+    profile = profile or {}
+    if profile_is_empty(profile):
+        return "请先在「个人资料」中填写姓名、技能与求职意向，才能生成投递招呼语。"
+    if llm_available():
+        ai = generate_greeting_ai(job, profile)
+        if ai and len(ai.strip()) > 20:
+            return ai.strip()
+    name = profile.get("name", "我")
+    return f"您好！我是{name}，看到贵司「{job.get('title', '')}」岗位很感兴趣，与我目前的实践方向比较契合，希望有机会进一步沟通，谢谢！"
+
+
+# AI 服务商预设：下拉选择后自动填充 base_url 与推荐模型
+AI_PROVIDER_PRESETS = {
+    "custom": {"label": "自定义", "base_url": "", "model": ""},
+    "deepseek": {"label": "DeepSeek", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
+    "doubao": {"label": "豆包（火山方舟）", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "model": "doubao-pro-32k"},
+    "openai": {"label": "OpenAI", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
+    "kimi": {"label": "Kimi（月之暗面）", "base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k"},
+    "qwen": {"label": "通义千问", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus"},
+    "zhipu": {"label": "智谱 GLM", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4-flash"},
+}
+
+
 def generate_cover_letter(job, profile=None):
     profile = profile or {}
     if profile_is_empty(profile):
@@ -2830,6 +2880,7 @@ class Handler(BaseHTTPRequestHandler):
             settings = load_settings()
             settings.pop("api_key", None)
             settings["has_key"] = bool(load_settings().get("api_key"))
+            settings["providers"] = AI_PROVIDER_PRESETS
             self._send(200, settings)
             return
         if head == "settings" and method == "PUT":
@@ -3090,8 +3141,10 @@ class Handler(BaseHTTPRequestHandler):
                 content = generate_resume(job, profile)
             elif kind == "cover_letter":
                 content = generate_cover_letter(job, profile)
+            elif kind == "greeting":
+                content = generate_greeting(job, profile)
             else:
-                self._send(400, {"ok": False, "error": "kind 必须是 resume 或 cover_letter"})
+                self._send(400, {"ok": False, "error": "kind 必须是 resume、cover_letter 或 greeting"})
                 return
             with _DB_LOCK:
                 conn = db()

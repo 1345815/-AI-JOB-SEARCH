@@ -589,6 +589,7 @@
       "</div></div>" +
       "</div>";
     bindJobItems();
+    bindProviderPreset();
     document.querySelectorAll("[data-onboard]").forEach(function (button) {
       button.addEventListener("click", function () { location.hash = "#/" + button.getAttribute("data-onboard"); });
     });
@@ -997,6 +998,7 @@
       appBtn +
       '<button class="btn" data-action="resume">生成简历</button>' +
       '<button class="btn" data-action="cover">生成求职信</button>' +
+      '<button class="btn" data-action="greet">生成招呼语</button>' +
       '<button class="btn" data-action="interview">面试准备</button>' +
       (job.url ? '<a class="btn" target="_blank" rel="noopener" href="' + esc(job.url) + '">查看原帖</a>' : "") +
       '<button class="btn btn-danger" data-action="deleteJob">删除</button>' +
@@ -1032,6 +1034,7 @@
         if (action === "addApplication") addApplication(job);
         else if (action === "resume") generateDoc(job, "resume");
         else if (action === "cover") generateDoc(job, "cover_letter");
+        else if (action === "greet") generateDoc(job, "greeting");
         else if (action === "interview") prepareInterview(job);
         else if (action === "openPipeline") { state.view = "pipeline"; location.hash = "#/pipeline"; }
         else if (action === "deleteJob") deleteJob(job);
@@ -1065,10 +1068,10 @@
   }
 
   async function generateDoc(job, kind) {
-    var label = kind === "resume" ? "简历" : "求职信";
+    var label = kind === "resume" ? "简历" : kind === "greeting" ? "招呼语" : "求职信";
     toast("已提交" + label + "生成任务…");
     try {
-      var taskType = kind === "resume" ? "resume.generate" : "cover_letter.generate";
+      var taskType = kind === "resume" ? "resume.generate" : kind === "greeting" ? "greeting.generate" : "cover_letter.generate";
       var task = await submitTask(taskType, { job_id: job.id });
       var last = "pending";
       var done = await pollTask(task.id, function (t) {
@@ -1083,7 +1086,8 @@
         return;
       }
       var doc = done.result || {};
-      showDocModal(doc.content, (kind === "resume" ? "定制简历" : "定制求职信") + " · " + job.company, doc.id);
+      var docLabel = kind === "resume" ? "定制简历" : kind === "greeting" ? "投递招呼语" : "定制求职信";
+      showDocModal(doc.content, docLabel + " · " + job.company, doc.id);
     } catch (e) { toast("生成失败：" + e.message, "error"); }
   }
 
@@ -2166,6 +2170,15 @@
         state.settings = s;
         el("llmEnabled").checked = !!s.enabled;
         el("llmBase").value = s.base_url || "";
+        // 根据 base_url 反选服务商
+        var prov = el("llmProvider");
+        if (prov && s.providers) {
+          var matched = "custom";
+          for (var key in s.providers) {
+            if (s.providers[key].base_url && s.base_url && s.base_url.indexOf(s.providers[key].base_url) === 0) matched = key;
+          }
+          prov.value = matched;
+        }
         // Key 框不再填 ******（误导），改为留空 + "已保存"状态
         el("llmKey").value = "";
         el("llmKey").placeholder = s.has_key ? "已保存 key（如需更换请直接粘贴新 key）" : "sk-...";
@@ -2175,6 +2188,18 @@
         renderAiStatusBanner(s);
       });
     }
+  }
+
+  function bindProviderPreset() {
+    var prov = el("llmProvider");
+    if (!prov) return;
+    prov.addEventListener("change", function () {
+      var p = (state.settings && state.settings.providers) || {};
+      var preset = p[prov.value];
+      if (!preset) return;
+      if (preset.base_url) el("llmBase").value = preset.base_url;
+      if (preset.model) el("llmModel").value = preset.model;
+    });
   }
 
   function renderAiStatusBanner(s) {
