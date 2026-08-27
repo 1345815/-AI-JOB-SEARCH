@@ -975,7 +975,7 @@
       "</div>" +
       '<div class="detail-score-row"><div class="detail-score">' + (needs ? "—" : score) + "</div>" +
       '<div><div class="detail-verdict">' + esc(needs ? "完善档案后查看匹配度" : (ev.verdict || "待评估")) + "</div>" +
-      '<div class="detail-summary">' + esc(needs ? "先到简历库上传简历，系统会结合你的技能、经历和职业目标进行五维匹配评分。" : (ev.summary || "")) + "</div></div></div>" +
+      '<div class="detail-summary">' + esc(needs ? "先到简历库上传简历，系统会结合你的技能、经历和职业目标进行五维匹配评分。" : (ev.summary || "")) + (ev.ai && ev.ai.used ? ' <span class="tag tag-accent">AI 深度校准</span>' : "") + "</div></div></div>" +
       (gateTags ? '<div class="detail-meta">' + gateTags + "</div>" : "") +
       "</div>" +
       '<div class="detail-sections">' +

@@ -1126,7 +1126,49 @@ def _profile_exp_text(profile):
     return " ".join(parts)
 
 
-def score_job(job, profile=None):
+def score_job_ai(job, profile, local_ev):
+    """AI 深度评分（第二阶段）：校准本地分并给出洞察。失败返回 None，调用方保留本地结果。"""
+    job_text = _text_of(job)[:4000]
+    skill_text = _profile_skill_text(profile)
+    exp_text = _profile_exp_text(profile)
+    goals = " ".join(profile.get("career_goals", [])) + " " + " ".join(profile.get("target_sectors", []))
+    system = (
+        "你是资深校招筛选专家。基于候选人档案对目标岗位做深度匹配评估。"
+        "硬性规则：只基于提供的候选人事实判断，禁止编造候选人没有的经历、技能或指标；"
+        "岗位硬门槛（学历届别/地点/年限）由系统本地已判断，你专注评估技能契合度、经历迁移性与投递价值。"
+        "输出严格 JSON（不要 markdown 代码块）："
+        '{"overall_adjust": 整数-10到10, "strengths": ["1-2条本地未提到的匹配点"], "gaps": ["1-2条本地未提到的风险点"], "advice": "30字内投递或面试建议"}'
+    )
+    user = (
+        "【目标岗位】\n%s\n\n【候选人技能】\n%s\n【候选人经历/项目】\n%s\n【职业目标】\n%s\n\n"
+        "【本地初评】综合 %s/100：%s\n请给出深度校准与洞察。" % (
+            job_text, skill_text[:800], exp_text[:1500], goals[:500],
+            local_ev.get("overall"), local_ev.get("summary", ""),
+        )
+    )
+    try:
+        text = llm_chat([{"role": "user", "content": user}], system=system)
+        if not text:
+            return None
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.startswith("json"):
+                text = text[4:]
+        data = json.loads(text)
+        adjust = int(data.get("overall_adjust", 0))
+        adjust = max(-10, min(10, adjust))
+        return {
+            "overall_adjust": adjust,
+            "strengths": [str(s) for s in data.get("strengths", [])[:2]],
+            "gaps": [str(g) for g in data.get("gaps", [])[:2]],
+            "advice": str(data.get("advice", ""))[:80],
+        }
+    except Exception:
+        return None
+
+
+def score_job(job, profile=None, deep=False):
     profile = profile or {}
     if profile_is_empty(profile):
         return {
@@ -1247,7 +1289,7 @@ def score_job(job, profile=None):
         + "。"
     )
 
-    return {
+    result = {
         "job_id": job["id"],
         "overall": overall,
         "verdict": verdict,
@@ -1263,6 +1305,33 @@ def score_job(job, profile=None):
         "summary": summary,
         "created_at": time.strftime("%Y-%m-%d"),
     }
+
+    # 两阶段评分：AI 深度校准（仅 deep=True 且本地达到可评估分值时触发，节省成本）
+    if deep and overall >= 45 and not gate["blocked"] and llm_available():
+        ai = score_job_ai(job, profile, result)
+        if ai:
+            adjusted = max(0, min(100, overall + ai["overall_adjust"]))
+            result["overall"] = adjusted
+            if adjusted >= 75:
+                result["verdict"] = "强烈建议申请"
+            elif adjusted >= 60:
+                result["verdict"] = "建议申请"
+            elif adjusted >= 45:
+                result["verdict"] = "可考虑"
+            else:
+                result["verdict"] = "谨慎考虑"
+            for s in ai["strengths"]:
+                if s and s not in result["strengths"]:
+                    result["strengths"].append(s)
+            for g in ai["gaps"]:
+                if g and g not in result["gaps"]:
+                    result["gaps"].append(g)
+            result["summary"] = result["summary"].split("。")[0] + "。" + (" AI 深度校准后 " + str(adjusted) + " 分。" if adjusted != overall else "")
+            result["ai"] = {"used": True, "adjust": ai["overall_adjust"], "advice": ai["advice"]}
+            if ai["advice"]:
+                result["gaps"].append("投递建议：" + ai["advice"])
+
+    return result
 
 
 def save_evaluation(user_id, ev):
@@ -3044,7 +3113,7 @@ class Handler(BaseHTTPRequestHandler):
                     "source": "URL解析",
                 })
                 job = get_job(job_id)
-                ev = score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})))
+                ev = score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})), deep=True)
                 save_evaluation(user["id"], ev)
                 self._send(200, {"ok": True, "data": {**job, "evaluation": ev}})
             except ValueError as exc:
@@ -3060,7 +3129,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             job_id = add_job(body)
             job = get_job(job_id)
-            ev = score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})))
+            ev = score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})), deep=True)
             save_evaluation(user["id"], ev)
             self._send(200, {**job, "evaluation": ev})
             return
@@ -3072,7 +3141,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"ok": False, "error": "岗位不存在"})
                 return
             if method == "GET":
-                ev = get_evaluation(user["id"], job_id) or score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})))
+                ev = get_evaluation(user["id"], job_id) or score_job(job, normalize_profile(_safe_json(user.get("profile_json"), {})), deep=True)
                 notify_deadline_if_needed(user["id"], job)
                 self._send(200, {**job, "evaluation": ev})
                 return

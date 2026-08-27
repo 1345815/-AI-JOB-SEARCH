@@ -518,3 +518,35 @@ def test_generate_greeting_ai_and_fallback(monkeypatch):
     assert "deepseek" in server_mod.AI_PROVIDER_PRESETS
     assert server_mod.AI_PROVIDER_PRESETS["deepseek"]["base_url"].startswith("https://")
     assert len(server_mod.AI_PROVIDER_PRESETS) >= 5
+
+
+def test_score_job_two_stage_ai_deep(monkeypatch):
+    """两阶段评分：deep=True 且达标时 AI 深度校准；低分/未配置不触发；批量调用默认本地。"""
+    import server as server_mod
+    job = {"id": "j1", "title": "AI 应用研发实习生", "company": "转转",
+           "description": "负责 LLM Agent 应用开发、Prompt 优化、数据分析，熟悉 Python",
+           "requirements": ["Python", "Agent"]}
+    profile = {"name": "马育琪", "status": "Data Agent", "city": "郑州",
+               "skills": {"strong": ["Python", "Agent", "LLM"]},
+               "projects": [{"title": "CareerPilot", "points": ["6 Agent 工作流"]}],
+               "experiences": [{"title": "实习", "company": "多益", "points": ["推广"]}],
+               "career_goals": ["AI 应用研发"]}
+    # 默认（批量搜索）不触发 AI
+    monkeypatch.setattr(server_mod, "llm_available", lambda: True)
+    ev0 = server_mod.score_job(job, profile)
+    assert not ev0.get("ai")
+    # deep + AI → 深度校准
+    monkeypatch.setattr(server_mod, "llm_chat", lambda m, system=None: '{"overall_adjust": 5, "strengths": ["多 Agent 契合"], "gaps": ["无线上流量"], "advice": "突出编排亮点"}')
+    ev1 = server_mod.score_job(job, profile, deep=True)
+    assert ev1["ai"]["used"] and ev1["ai"]["adjust"] == 5
+    assert any("多 Agent" in s for s in ev1["strengths"])
+    # 低分不触发
+    low = dict(job, title="门卫保安", description="小区门岗执勤、访客登记", requirements=["身体健康"])
+    ev2 = server_mod.score_job(low, profile, deep=True)
+    assert not ev2.get("ai")
+    # AI 失败 → 保留本地
+    def boom(m, system=None):
+        raise RuntimeError("down")
+    monkeypatch.setattr(server_mod, "llm_chat", boom)
+    ev3 = server_mod.score_job(job, profile, deep=True)
+    assert not ev3.get("ai") and ev3["overall"] > 0
