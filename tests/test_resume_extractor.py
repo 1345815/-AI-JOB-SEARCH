@@ -550,3 +550,26 @@ def test_score_job_two_stage_ai_deep(monkeypatch):
     monkeypatch.setattr(server_mod, "llm_chat", boom)
     ev3 = server_mod.score_job(job, profile, deep=True)
     assert not ev3.get("ai") and ev3["overall"] > 0
+
+
+def test_followup_reply_diagnose(monkeypatch):
+    """跟进消息 / 回复分析 / 系统体检：AI 通道与本地兜底。"""
+    import server as server_mod
+    app = {"title": "AI 应用研发实习生", "company": "转转", "stage": "面试中", "notes": "HR 说下周面试"}
+    # 跟进：AI
+    monkeypatch.setattr(server_mod, "llm_available", lambda: True)
+    monkeypatch.setattr(server_mod, "llm_chat", lambda m, system=None: "您好，想跟进面试进展，谢谢！")
+    assert "跟进" in server_mod.generate_follow_up(app, {"name": "马育琪"})
+    # 跟进：兜底
+    monkeypatch.setattr(server_mod, "llm_available", lambda: False)
+    assert "马育琪" in server_mod.generate_follow_up(app, {"name": "马育琪"})
+    # 回复分析：AI
+    monkeypatch.setattr(server_mod, "llm_available", lambda: True)
+    monkeypatch.setattr(server_mod, "llm_chat", lambda m, system=None: '{"intent": "积极", "advice": "准备面试"}')
+    assert server_mod.analyze_reply("约面试", app)["intent"] == "积极"
+    # 回复分析：本地
+    monkeypatch.setattr(server_mod, "llm_available", lambda: False)
+    assert server_mod.analyze_reply("暂不合适", app)["intent"] == "消极"
+    # 系统体检：返回列表且有 ok/warn 项
+    items = server_mod.diagnose_system(None)
+    assert len(items) >= 3 and all(i.get("name") and i.get("status") in ("ok", "warn", "fail") for i in items)

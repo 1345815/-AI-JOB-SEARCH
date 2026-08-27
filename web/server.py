@@ -2003,6 +2003,117 @@ AI_PROVIDER_PRESETS = {
 }
 
 
+def generate_follow_up(app, profile=None):
+    """AI 生成跟进消息：像真人 IM，60-110 字。失败回退模板。"""
+    profile = profile or {}
+    name = profile.get("name", "我")
+    if llm_available():
+        compact = {
+            "姓名": name,
+            "岗位": app.get("title", ""),
+            "公司": app.get("company", ""),
+            "阶段": app.get("stage", ""),
+            "已有沟通记录": (app.get("notes") or "")[:300],
+        }
+        system = (
+            "你是求职者，需要给目标公司的 HR 发一条跟进消息（中文 IM 风格）。"
+            "硬性要求：像真人随手发出的消息，不是公文；60-110 字，最多 3 个短句；"
+            "围绕面试/投递进展自然询问，礼貌不催促；只使用提供的事实，禁止编造沟通内容；"
+            "不要用'尊敬的'等书面称呼。"
+        )
+        try:
+            content = llm_chat([{"role": "user", "content": "【申请记录】\n%s" % json.dumps(compact, ensure_ascii=False)}], system=system)
+            if content and len(content.strip()) > 15:
+                return content.strip()
+        except Exception:
+            pass
+    return f"{name}您好，想跟进一下「{app.get('title', '')}」{app.get('stage', '')}的进展，有需要补充的材料随时告诉我，谢谢！"
+
+
+def analyze_reply(reply, app=None, profile=None):
+    """AI 分析 HR 回复：判断意向并给建议。失败回退关键词判断。"""
+    if not reply or not reply.strip():
+        return {"intent": "未知", "advice": "粘贴 HR 回复内容后分析。"}
+    if llm_available():
+        system = (
+            "你是求职助手。分析 HR 回复判断招聘意向并给建议。输出严格 JSON（不要代码块）："
+            '{"intent": "积极|中性|消极|待定", "advice": "30字内下一步建议"}。'
+            "只基于回复文本判断，不臆测。"
+        )
+        try:
+            text = llm_chat([{"role": "user", "content": "HR 回复：\n" + reply[:1500]}], system=system)
+            if text:
+                text = text.strip().strip("`")
+                if text.startswith("json"):
+                    text = text[4:]
+                data = json.loads(text)
+                intent = str(data.get("intent", "待定"))
+                if intent not in ("积极", "中性", "消极", "待定"):
+                    intent = "待定"
+                return {"intent": intent, "advice": str(data.get("advice", ""))[:80]}
+        except Exception:
+            pass
+    # 本地兜底
+    pos = [k for k in ("面试", "约", "联系", "期待", "合适", "通过") if k in reply]
+    neg = [k for k in ("暂不", "不合适", "已满", "停止", "抱歉") if k in reply]
+    intent = "积极" if pos and not neg else "消极" if neg else "待定"
+    return {"intent": intent, "advice": "结合回复内容安排下一步（面试准备/继续跟进/转向其他机会）。"}
+
+
+def diagnose_system(user=None):
+    """系统体检：AI 配置 / 数据库 / 档案 / 岗位库 / 看板，返回检查项列表。"""
+    items = []
+    # 1. AI 配置
+    try:
+        settings = load_settings()
+        if not settings.get("enabled"):
+            items.append({"name": "AI 增强", "status": "warn", "note": "未启用。本地功能不受影响；开启后可获得 AI 评分/简历定制。"})
+        elif not settings.get("api_key") or not settings.get("base_url"):
+            items.append({"name": "AI 增强", "status": "fail", "note": "已启用但缺少 API 地址或 Key，请在设置中补全。"})
+        else:
+            items.append({"name": "AI 增强", "status": "ok", "note": "已启用（%s / %s）" % (settings.get("base_url", ""), settings.get("model", ""))})
+    except Exception as exc:
+        items.append({"name": "AI 增强", "status": "fail", "note": "配置读取失败：" + str(exc)[:60]})
+    # 2. 数据库
+    try:
+        with _DB_LOCK:
+            conn = db()
+            total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            conn.close()
+        items.append({"name": "数据库", "status": "ok", "note": "可读写，岗位库 %d 条" % total})
+    except Exception as exc:
+        items.append({"name": "数据库", "status": "fail", "note": str(exc)[:60]})
+    # 3. 个人档案
+    try:
+        if user:
+            profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
+            if profile_is_empty(profile):
+                items.append({"name": "个人档案", "status": "warn", "note": "档案为空，评分/定制无法生效。到简历库上传简历一键填充。"})
+            else:
+                missing = [k for k in ("name", "skills", "experiences") if not profile.get(k)]
+                items.append({"name": "个人档案", "status": "warn" if missing else "ok", "note": ("缺：" + "、".join(missing)) if missing else "完整，评分/定制可正常使用。"})
+    except Exception as exc:
+        items.append({"name": "个人档案", "status": "warn", "note": "读取异常：" + str(exc)[:50]})
+    # 4. 岗位来源
+    try:
+        with _DB_LOCK:
+            conn = db()
+            last = conn.execute("SELECT MAX(created_at) AS m FROM jobs").fetchone()["m"]
+            conn.close()
+        items.append({"name": "岗位来源", "status": "ok", "note": ("最近入库 %s，岗位库自动刷新每 24h 运行" % last) if last else "岗位库为空，去搜索或粘贴岗位链接"})
+    except Exception as exc:
+        items.append({"name": "岗位来源", "status": "fail", "note": str(exc)[:50]})
+    # 5. 看板服务（8420）
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:8420/dashboard.html", timeout=5) as resp:
+            ok = resp.status == 200
+        items.append({"name": "投递看板", "status": "ok" if ok else "warn", "note": "在线" if ok else "未启动（不影响主站）"})
+    except Exception:
+        items.append({"name": "投递看板", "status": "warn", "note": "未启动（可选组件，不影响主站）"})
+    return items
+
+
 def generate_cover_letter(job, profile=None):
     profile = profile or {}
     if profile_is_empty(profile):
@@ -3283,6 +3394,38 @@ class Handler(BaseHTTPRequestHandler):
                 rows = conn.execute("SELECT * FROM help_records WHERE user_id=? ORDER BY record_date DESC, updated_at DESC, id DESC", (user["id"],)).fetchall()
                 conn.close()
             self._send(200, [dict(r) for r in rows])
+            return
+
+        if head == "applications" and len(parts) >= 2 and parts[1] == "follow-up" and method == "POST":
+            body = self._json_body()
+            app_id = (body or {}).get("app_id")
+            with _DB_LOCK:
+                conn = db()
+                app = conn.execute("SELECT * FROM applications WHERE id=? AND user_id=?", (app_id, user["id"])).fetchone()
+                conn.close()
+            if not app:
+                self._send(404, {"ok": False, "error": "申请记录不存在"})
+                return
+            profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
+            content = generate_follow_up(dict(app), profile)
+            self._send(200, {"ok": True, "content": content})
+            return
+
+        if head == "applications" and len(parts) >= 2 and parts[1] == "analyze-reply" and method == "POST":
+            body = self._json_body()
+            app_id = (body or {}).get("app_id")
+            reply = (body or {}).get("reply") or ""
+            with _DB_LOCK:
+                conn = db()
+                app = conn.execute("SELECT * FROM applications WHERE id=? AND user_id=?", (app_id, user["id"])).fetchone()
+                conn.close()
+            result = analyze_reply(reply, dict(app) if app else None)
+            self._send(200, {"ok": True, "data": result})
+            return
+
+        if head == "system" and len(parts) >= 1 and parts[0] == "diagnose" and method == "GET":
+            items = diagnose_system(user)
+            self._send(200, {"ok": True, "data": items})
             return
 
         if head in ("help-records", "help_records") and method == "POST":

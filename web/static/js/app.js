@@ -1180,6 +1180,8 @@
               (si.next ? '<button class="btn btn-sm btn-primary" data-move="' + a.id + '" data-to="' + esc(si.next) + '">推进到' + esc(si.next) + "</button>" : "") +
               (col !== "已归档" ? '<button class="btn btn-sm" data-move="' + a.id + '" data-to="已归档">归档</button>' : '<button class="btn btn-sm" data-move="' + a.id + '" data-to="已收藏">恢复</button>') +
               '<button class="btn btn-sm" data-edit-app="' + a.id + '">编辑跟进</button>' +
+              '<button class="btn btn-sm" data-gen-followup="' + a.id + '">AI 跟进</button>' +
+              '<button class="btn btn-sm" data-analyze-reply="' + a.id + '">分析回复</button>' +
               "</div></div>"
             );
           }).join("") : '<div class="muted text-sm" style="padding:8px">暂无</div>') +
@@ -1213,6 +1215,8 @@
       });
     });
     document.querySelectorAll("[data-edit-app]").forEach(function (btn) { btn.addEventListener("click", function () { editApplication(btn.getAttribute("data-edit-app")); }); });
+    document.querySelectorAll("[data-gen-followup]").forEach(function (btn) { btn.addEventListener("click", function () { genFollowUp(btn.getAttribute("data-gen-followup")); }); });
+    document.querySelectorAll("[data-analyze-reply]").forEach(function (btn) { btn.addEventListener("click", function () { analyzeReplyPrompt(btn.getAttribute("data-analyze-reply")); }); });
     var saveRecord = el("saveHelpRecord");
     if (saveRecord) saveRecord.addEventListener("click", saveHelpRecord);
     document.querySelectorAll("[data-delete-help-record]").forEach(function (btn) { btn.addEventListener("click", function () { deleteHelpRecord(btn.getAttribute("data-delete-help-record")); }); });
@@ -1245,6 +1249,79 @@
       if (updated && today - updated > 7 * 86400000) return { title:a.title, company:a.company, text:"超过 7 天未更新", cls:"tag-warn" };
       return null;
     }).filter(Boolean);
+  }
+
+  async function genFollowUp(id) {
+    var app = state.applications.find(function (item) { return String(item.id) === String(id); });
+    if (!app) return;
+    toast("AI 正在生成跟进消息…");
+    try {
+      var res = await api("applications/follow-up", { method: "POST", body: { app_id: id } });
+      var content = (res && res.content) || "";
+      if (!content) { toast("生成失败，请重试", "error"); return; }
+      var overlay = document.createElement("div");
+      overlay.className = "modal-overlay open";
+      overlay.innerHTML = '<div class="modal modal-wide"><div class="modal-head"><strong>AI 跟进消息 · ' + esc(app.company) + '</strong><button class="icon-btn modal-close" aria-label="关闭">×</button></div>' +
+        '<div class="modal-body"><p class="muted">可直接复制发给 HR，或稍作个性化调整。</p>' +
+        '<textarea class="code-block" rows="5" style="width:100%">' + esc(content) + '</textarea>' +
+        '<div class="modal-actions"><button class="btn" id="closeFollowup">关闭</button><button class="btn btn-primary" id="copyFollowup">复制</button></div></div></div>';
+      document.body.appendChild(overlay);
+      overlay.querySelector(".modal-close").onclick = function () { overlay.remove(); };
+      overlay.querySelector("#closeFollowup").onclick = function () { overlay.remove(); };
+      overlay.querySelector("#copyFollowup").onclick = function () {
+        var ta = overlay.querySelector("textarea");
+        ta.select(); document.execCommand("copy");
+        toast("已复制", "success"); overlay.remove();
+      };
+    } catch (e) { toast("生成失败：" + e.message, "error"); }
+  }
+
+  async function analyzeReplyPrompt(id) {
+    var app = state.applications.find(function (item) { return String(item.id) === String(id); });
+    if (!app) return;
+    var overlay = document.createElement("div");
+    overlay.className = "modal-overlay open";
+    overlay.innerHTML = '<div class="modal modal-wide"><div class="modal-head"><strong>分析 HR 回复 · ' + esc(app.company) + '</strong><button class="icon-btn modal-close" aria-label="关闭">×</button></div>' +
+      '<div class="modal-body"><label class="field"><span>HR 回复原文</span><textarea id="replyText" rows="4" placeholder="把 HR 的回复粘贴到这里">' + esc(app.notes || "") + '</textarea></label>' +
+      '<div id="replyResult" class="muted">点「分析」判断招聘意向与下一步建议。</div>' +
+      '<div class="modal-actions"><button class="btn" id="cancelReply">取消</button><button class="btn btn-primary" id="doAnalyze">分析</button></div></div></div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector(".modal-close").onclick = function () { overlay.remove(); };
+    overlay.querySelector("#cancelReply").onclick = function () { overlay.remove(); };
+    overlay.querySelector("#doAnalyze").onclick = async function () {
+      var reply = overlay.querySelector("#replyText").value.trim();
+      if (!reply) { toast("请先粘贴 HR 回复", "error"); return; }
+      var btn = overlay.querySelector("#doAnalyze");
+      btn.disabled = true; btn.textContent = "分析中…";
+      try {
+        var res = await api("applications/analyze-reply", { method: "POST", body: { app_id: id, reply: reply } });
+        var d = (res && res.data) || {};
+        var cls = d.intent === "积极" ? "text-success" : d.intent === "消极" ? "resume-error" : "";
+        overlay.querySelector("#replyResult").innerHTML = '<strong class="' + cls + '">意向：' + esc(d.intent || "待定") + '</strong><p class="muted">' + esc(d.advice || "") + '</p>';
+        toast("分析完成", "success");
+      } catch (e) { overlay.querySelector("#replyResult").textContent = "分析失败：" + e.message; }
+      finally { btn.disabled = false; btn.textContent = "分析"; }
+    };
+  }
+
+  async function runSystemDiagnose() {
+    var overlay = document.createElement("div");
+    overlay.className = "modal-overlay open";
+    overlay.innerHTML = '<div class="modal modal-wide"><div class="modal-head"><strong>系统体检</strong><button class="icon-btn modal-close" aria-label="关闭">×</button></div>' +
+      '<div class="modal-body"><div id="diagList" class="muted">正在检查…</div>' +
+      '<div class="modal-actions"><button class="btn" id="closeDiag">关闭</button></div></div></div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector(".modal-close").onclick = function () { overlay.remove(); };
+    overlay.querySelector("#closeDiag").onclick = function () { overlay.remove(); };
+    try {
+      var res = await api("system/diagnose");
+      var items = (res && res.data) || [];
+      var icon = { ok: "✅", warn: "⚠️", fail: "❌" };
+      overlay.querySelector("#diagList").innerHTML = '<div class="list">' + items.map(function (it) {
+        var cls = it.status === "ok" ? "text-success" : it.status === "warn" ? "tag-warn" : "resume-error";
+        return '<div class="list-row"><div class="row-main"><div class="row-title">' + icon[it.status] + " " + esc(it.name) + '</div><div class="row-sub">' + esc(it.note) + "</div></div></div>";
+      }).join("") + "</div>";
+    } catch (e) { overlay.querySelector("#diagList").textContent = "体检失败：" + e.message; }
   }
 
   async function editApplication(id) {
@@ -2466,6 +2543,7 @@
       button.disabled = true; button.textContent = "测试中…";
       try { await verifyAiConnection(); } finally { button.disabled = false; button.textContent = "测试 AI 连接"; }
     });
+    el("systemDiagnose").addEventListener("click", runSystemDiagnose);
     el("detectModels").addEventListener("click", detectModels);
     el("addJobBtn").addEventListener("click", openAddJob);
     el("saveJob").addEventListener("click", saveJob);
