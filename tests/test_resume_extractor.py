@@ -498,3 +498,23 @@ def test_generate_resume_ai_channel_and_fallback(monkeypatch):
     monkeypatch.setattr(server_mod, "llm_available", lambda: False)
     r3 = server_mod.generate_resume(job, profile)
     assert "## 项目经历" in r3
+
+
+def test_generate_greeting_ai_and_fallback(monkeypatch):
+    """投递招呼语：AI 生成 + 未配置回退模板；服务商预设齐全。"""
+    import server as server_mod
+    job = {"title": "AI 应用研发实习生", "company": "转转", "description": "负责 LLM Agent 应用开发"}
+    profile = {"name": "马育琪", "status": "Data Agent 应用研发", "skills": {"strong": ["Python"]}}
+    # AI 可用 → AI 输出
+    monkeypatch.setattr(server_mod, "llm_available", lambda: True)
+    monkeypatch.setattr(server_mod, "llm_chat", lambda m, system=None: "您好，看到贵司在做 LLM Agent 应用开发，我的实践非常对口，希望有机会聊聊！")
+    r1 = server_mod.generate_greeting(job, profile)
+    assert "Multi" not in r1 and "聊" in r1 or "您好" in r1
+    # 未配置 → 兜底模板
+    monkeypatch.setattr(server_mod, "llm_available", lambda: False)
+    r2 = server_mod.generate_greeting(job, profile)
+    assert "马育琪" in r2
+    # 服务商预设
+    assert "deepseek" in server_mod.AI_PROVIDER_PRESETS
+    assert server_mod.AI_PROVIDER_PRESETS["deepseek"]["base_url"].startswith("https://")
+    assert len(server_mod.AI_PROVIDER_PRESETS) >= 5
