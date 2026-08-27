@@ -1846,7 +1846,32 @@ def _pick_project_points(profile, job_text, limit=3):
     return scored[:limit]
 
 
-def generate_resume_ai(job, profile):
+# 简历生成档位：不同优化策略的 prompt 补充
+RESUME_MODES = {
+    "standard": {
+        "label": "标准定制",
+        "hint": "",
+    },
+    "star": {
+        "label": "STAR 改写",
+        "hint": "用 STAR 法则（情境-任务-行动-结果）重写实习/项目要点，突出个人行动与量化结果；每段 2-3 条。",
+    },
+    "boost": {
+        "label": "适度拔高",
+        "hint": "在事实边界内适度拔高表述：动词更专业、结果更醒目、补充与岗位相关的迁移价值；不得虚构数字、头衔或经历。",
+    },
+    "hr": {
+        "label": "HR 口味",
+        "hint": "HR 阅读友好：短句、要点前置、亮点加粗标记、剔除冗余描述；一页内可扫读。",
+    },
+    "ats": {
+        "label": "过机筛",
+        "hint": "针对 ATS 机筛反向优化：把 JD 中的高频关键词/技能/资质尽量自然融入概述、经历与技能段（同义替换不硬塞）；保持可读与真实。",
+    },
+}
+
+
+def generate_resume_ai(job, profile, mode="standard"):
     """AI 定制简历：基于 JD + 档案生成 Markdown，不编造经历。失败返回 None 由调用方回退。"""
     job_text = _text_of(job)[:6000]
     compact = {
@@ -1863,6 +1888,7 @@ def generate_resume_ai(job, profile):
         "certifications": profile.get("certifications", [])[:6],
         "languages": profile.get("languages", []),
     }
+    mode_hint = (RESUME_MODES.get(mode) or RESUME_MODES["standard"])["hint"]
     system = (
         "你是资深校招简历定制专家。基于候选人档案和目标岗位 JD 生成一份中文 Markdown 简历。"
         "规则：只使用档案中真实存在的内容，禁止编造经历、指标、公司、学历、日期；"
@@ -1871,6 +1897,8 @@ def generate_resume_ai(job, profile):
         "技能按 JD 优先级重排并保留未在 JD 中但真实的技能；"
         "输出标准 Markdown：一级标题为姓名+·个人简历，二级标题为 求职意向/核心优势/项目经历/实习与工作经历/教育背景/专业技能/证书与获奖。不要输出额外解释。"
     )
+    if mode_hint:
+        system += "\n本次优化档位要求：" + mode_hint
     user = "【目标岗位】\n%s\n\n【候选人档案】\n%s" % (job_text, json.dumps(compact, ensure_ascii=False))
     try:
         return llm_chat([{"role": "user", "content": user}], system=system)
@@ -1878,13 +1906,13 @@ def generate_resume_ai(job, profile):
         return None
 
 
-def generate_resume(job, profile=None):
+def generate_resume(job, profile=None, mode="standard"):
     profile = profile or {}
     if profile_is_empty(profile):
         return "请先在「个人资料」中填写姓名、技能、经历与职业目标，才能生成定制简历。"
     # AI 定制优先：LLM 可用且成功生成时使用；失败/未配置回退本地模板
     if llm_available():
-        ai_resume = generate_resume_ai(job, profile)
+        ai_resume = generate_resume_ai(job, profile, mode)
         if ai_resume and len(ai_resume.strip()) > 80:
             return ai_resume
     job_text = _text_of(job)

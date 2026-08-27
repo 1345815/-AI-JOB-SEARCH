@@ -45,7 +45,8 @@ def _handle_doc(data, kind):
         raise TaskError("岗位不存在")
     profile = server.normalize_profile(profile)
     if kind == "resume":
-        content = server.generate_resume(job, profile)
+        mode = (data or {}).get("mode") or "standard"
+        content = server.generate_resume(job, profile, mode=mode)
     elif kind == "greeting":
         content = server.generate_greeting(job, profile)
     else:

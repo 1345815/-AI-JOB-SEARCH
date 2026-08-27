@@ -1032,7 +1032,7 @@
         var job = state.jobs.find(function (j) { return j.id === state.selectedJobId; });
         if (!job) return;
         if (action === "addApplication") addApplication(job);
-        else if (action === "resume") generateDoc(job, "resume");
+        else if (action === "resume") resumeModePrompt(job);
         else if (action === "cover") generateDoc(job, "cover_letter");
         else if (action === "greet") generateDoc(job, "greeting");
         else if (action === "interview") prepareInterview(job);
@@ -1067,12 +1067,37 @@
     }
   }
 
-  async function generateDoc(job, kind) {
+  var RESUME_MODES = [
+    { key: "standard", label: "标准定制", desc: "概述对齐 JD、经历按匹配度重排" },
+    { key: "star", label: "STAR 改写", desc: "用情境-任务-行动-结果重写要点，突出个人贡献" },
+    { key: "boost", label: "适度拔高", desc: "事实边界内动词更专业、结果更醒目" },
+    { key: "hr", label: "HR 口味", desc: "短句要点前置、一页可扫读" },
+    { key: "ats", label: "过机筛", desc: "针对 JD 反向融入关键词，提升 ATS 通过率" },
+  ];
+
+  function resumeModePrompt(job) {
+    var overlay = document.createElement("div");
+    overlay.className = "modal-overlay open";
+    overlay.innerHTML = '<div class="modal modal-wide"><div class="modal-head"><strong>生成定制简历 · ' + esc(job.title) + '</strong><button class="icon-btn modal-close" aria-label="关闭">×</button></div>' +
+      '<div class="modal-body"><p class="muted">选择优化档位，AI 会按该策略重写你的简历（均基于档案真实内容，不编造）。</p>' +
+      '<div class="list">' + RESUME_MODES.map(function (m) {
+        return '<button class="list-row" data-mode="' + m.key + '" style="width:100%;text-align:left;border:1px solid var(--border-strong);border-radius:8px;padding:10px 14px;margin-bottom:8px;background:#fff;cursor:pointer"><div class="row-main"><div class="row-title">' + m.label + '</div><div class="row-sub">' + esc(m.desc) + "</div></div></button>";
+      }).join("") + "</div>" +
+      '<div class="modal-actions"><button class="btn" id="cancelMode">取消</button></div></div></div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector(".modal-close").onclick = function () { overlay.remove(); };
+    overlay.querySelector("#cancelMode").onclick = function () { overlay.remove(); };
+    overlay.querySelectorAll("[data-mode]").forEach(function (btn) {
+      btn.addEventListener("click", function () { overlay.remove(); generateDoc(job, "resume", btn.getAttribute("data-mode")); });
+    });
+  }
+
+  async function generateDoc(job, kind, mode) {
     var label = kind === "resume" ? "简历" : kind === "greeting" ? "招呼语" : "求职信";
     toast("已提交" + label + "生成任务…");
     try {
       var taskType = kind === "resume" ? "resume.generate" : kind === "greeting" ? "greeting.generate" : "cover_letter.generate";
-      var task = await submitTask(taskType, { job_id: job.id });
+      var task = await submitTask(taskType, { job_id: job.id, mode: mode || "standard" });
       var last = "pending";
       var done = await pollTask(task.id, function (t) {
         if (t.status !== last) {

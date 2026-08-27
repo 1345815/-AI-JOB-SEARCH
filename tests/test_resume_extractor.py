@@ -573,3 +573,24 @@ def test_followup_reply_diagnose(monkeypatch):
     # 系统体检：返回列表且有 ok/warn 项
     items = server_mod.diagnose_system(None)
     assert len(items) >= 3 and all(i.get("name") and i.get("status") in ("ok", "warn", "fail") for i in items)
+
+
+def test_resume_modes_prompt_injection(monkeypatch):
+    """简历 5 档位：mode 正确注入 prompt；默认 standard 无额外要求。"""
+    import server as server_mod
+    job = {"title": "AI 应用研发实习生", "company": "转转", "description": "负责 LLM Agent 应用开发"}
+    profile = {"name": "马育琪", "status": "Data Agent", "skills": {"strong": ["Python"]},
+               "projects": [{"title": "CareerPilot", "points": ["6 Agent"]}], "experiences": []}
+    seen = {}
+    def fake_llm(messages, system=None):
+        seen["sys"] = system or ""
+        return "# 马育琪\n\n## 核心优势\nok\n\n## 项目经历\n- x\n\n## 教育背景\n- e\n\n## 专业技能\n- s\n\n## 证书与获奖\n- c"
+    monkeypatch.setattr(server_mod, "llm_available", lambda: True)
+    monkeypatch.setattr(server_mod, "llm_chat", fake_llm)
+    assert len(server_mod.RESUME_MODES) == 5
+    server_mod.generate_resume(job, profile, mode="ats")
+    assert "ATS 机筛" in seen["sys"]
+    server_mod.generate_resume(job, profile, mode="star")
+    assert "STAR" in seen["sys"]
+    server_mod.generate_resume(job, profile)
+    assert "档位要求" not in seen["sys"]
