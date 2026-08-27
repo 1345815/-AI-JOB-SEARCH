@@ -1112,11 +1112,11 @@
       }
       var doc = done.result || {};
       var docLabel = kind === "resume" ? "定制简历" : kind === "greeting" ? "投递招呼语" : "定制求职信";
-      showDocModal(doc.content, docLabel + " · " + job.company, doc.id);
+      showDocModal(doc.content, docLabel + " · " + job.company, doc.id, kind);
     } catch (e) { toast("生成失败：" + e.message, "error"); }
   }
 
-  function showDocModal(content, title, docId) {
+  function showDocModal(content, title, docId, kind) {
     var overlay = document.createElement("div");
     overlay.className = "modal-overlay open";
     overlay.innerHTML =
@@ -1124,11 +1124,18 @@
       '<div class="modal-head"><strong>' + esc(title) + "</strong>" +
       '<div class="flex"><a class="btn btn-sm" href="/api/documents/download/' + docId + '">下载 Markdown</a>' +
       '<a class="btn btn-sm btn-primary" href="/api/documents/pdf/' + docId + '">下载 PDF</a>' +
+      (kind === "resume" ? '<button class="btn btn-sm btn-primary" id="openInEditor">🎨 在编辑器中美化</button>' : "") +
       '<button class="btn btn-sm" id="printDocument">打印 / 另存为 PDF</button>' +
       '<button class="icon-btn modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div>' +
       '<div class="modal-body" style="max-height:72vh;overflow-y:auto"><div class="doc-preview">' + renderMarkdown(content) + "</div></div>" +
       "</div>";
     overlay.querySelector(".modal-close").addEventListener("click", function () { overlay.remove(); });
+    var edBtn = overlay.querySelector("#openInEditor");
+    if (edBtn) edBtn.addEventListener("click", function () {
+      overlay.remove();
+      if (typeof openResumeEditorFromMarkdown === "function") openResumeEditorFromMarkdown(content);
+      else toast("编辑器加载失败，请刷新页面", "error");
+    });
     overlay.querySelector("#printDocument").addEventListener("click", function () { printDocument(content, title); });
     overlay.addEventListener("click", function (e) { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);

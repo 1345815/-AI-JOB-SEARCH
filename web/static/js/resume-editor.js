@@ -119,5 +119,97 @@
     overlay.addEventListener("click", function (e) { if (e.target === overlay) overlay.remove(); });
   }
 
+  /* 解析生成简历的 Markdown → 结构化档案，供编辑器使用 */
+  function parseResumeMarkdown(md) {
+    md = md || "";
+    var p = { name: "", status: "", education: [], experiences: [], projects: [], skills: { strong: [] }, certifications: [], notes: "" };
+    var section = "";
+    var current = null;
+    function pushEntry() {
+      if (!current) return;
+      if (section.indexOf("教育") >= 0) {
+        p.education.push({ school: current.org || current.title, degree: current.title, period: current.period || "", detail: "" });
+      } else if (section.indexOf("实习") >= 0 || section.indexOf("工作") >= 0) {
+        current.company = current.org || ""; p.experiences.push(current);
+      } else if (section.indexOf("项目") >= 0) {
+        current.role = current.org || ""; p.projects.push(current);
+      } else {
+        current.company = current.org || ""; p.experiences.push(current);
+      }
+      current = null;
+    }
+    function splitKV(line) {
+      var idx = -1;
+      for (var i = 0; i < line.length; i++) {
+        var ch = line[i];
+        if (ch === "：" || ch === ":") { idx = i; break; }
+      }
+      if (idx <= 0) return null;
+      var left = line.slice(0, idx).replace(/\*/g, "").trim();
+      var right = line.slice(idx + 1).replace(/\*\*/g, "").trim();
+      return { left: left, right: right };
+    }
+    md.split(/\r?\n/).forEach(function (raw) {
+      var line = raw.trim();
+      if (!line) return;
+      var h1 = line.match(/^#\s+(.+)/);
+      var h2 = line.match(/^##\s+(.+)/);
+      if (h1) { p.name = h1[1].replace(/·.*/, "").replace(/个人简历.*$/, "").trim() || p.name; return; }
+      if (h2) { pushEntry(); section = h2[1]; current = null; return; }
+      var kv = splitKV(line);
+      if (kv) {
+        if (kv.left.indexOf("求职意向") >= 0) { p.status = kv.right; return; }
+        if (kv.left.indexOf("状态") >= 0) { if (!p.status) p.status = kv.right; return; }
+        if (kv.left.indexOf("姓名") >= 0) { p.name = kv.right || p.name; return; }
+        if (kv.left.indexOf("主技能") >= 0 || kv.left.indexOf("技能") >= 0 || kv.left.indexOf("核心优势") >= 0 || kv.left.indexOf("核心技能") >= 0) {
+          var sk = kv.right.split(/[、，,；;]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+          p.skills.strong = p.skills.strong.concat(sk); return;
+        }
+        if (kv.left.indexOf("概述") >= 0 || kv.left.indexOf("优势") >= 0) { p.notes = kv.right; return; }
+        if (kv.left.indexOf("城市") >= 0 || kv.left.indexOf("语言") >= 0 || kv.left.indexOf("邮箱") >= 0 || kv.left.indexOf("电话") >= 0) return;
+        if (kv.left.length <= 12 && kv.left.indexOf("【") < 0) { if (section.indexOf("概述") >= 0 || section.indexOf("优势") >= 0) { p.notes = (p.notes ? p.notes + "\n" : "") + kv.left + "：" + kv.right; } return; }
+      }
+      var stripped = line.replace(/^\*+|\*+$/g, "");
+      var pipeItem = stripped.match(/^(.+?)\s*\|\s*(.+?)(?:（(.+?)）)?$/);
+      if (pipeItem && line.indexOf("|") >= 0) {
+        pushEntry();
+        current = { title: pipeItem[1].replace(/\*/g, "").trim(), org: pipeItem[2].replace(/\*/g, "").trim(), period: pipeItem[3] || "", points: [] };
+        return;
+      }
+      var bullet = line.replace(/^[·◆•*\-–—]\s*/, "");
+      if (bullet !== line || /^[·◆•]/.test(line)) {
+        if (current) { current.points.push(bullet); return; }
+        if (section.indexOf("证书") >= 0 || section.indexOf("获奖") >= 0) { p.certifications.push(bullet); return; }
+        if (section.indexOf("项目") >= 0) {
+          var projTitle = bullet.split(/[：:]/)[0];
+          var rest = bullet.indexOf("：") >= 0 ? bullet.slice(bullet.indexOf("：") + 1) : "";
+          pushEntry();
+          current = { title: projTitle, org: "", period: "", points: rest ? [rest] : [] };
+          pushEntry();
+          return;
+        }
+        if (section.indexOf("实习") >= 0 || section.indexOf("工作") >= 0) { return; }
+        if (section.indexOf("概述") >= 0 || section.indexOf("优势") >= 0) { p.notes = (p.notes ? p.notes + "\n" : "") + bullet; return; }
+        if (section.indexOf("技能") >= 0) { p.skills.strong.push(bullet.replace(/^\*\*?/, "").replace(/\*\*?$/, "")); return; }
+        return;
+      }
+      if (section.indexOf("概述") >= 0 || section.indexOf("优势") >= 0) {
+        p.notes = (p.notes ? p.notes + "\n" : "") + line;
+      }
+    });
+    pushEntry();
+    p.skills.strong = p.skills.strong.filter(function (s) { return s && s.length > 1; });
+    return p;
+  }
+
+  function openResumeEditorFromMarkdown(md) {
+    var p = parseResumeMarkdown(md);
+    if (!p.name && !p.experiences.length) {
+      p.notes = md.slice(0, 1500);
+    }
+    openResumeEditor(p);
+  }
+
   window.openResumeEditor = openResumeEditor;
+  window.openResumeEditorFromMarkdown = openResumeEditorFromMarkdown;
 })();
