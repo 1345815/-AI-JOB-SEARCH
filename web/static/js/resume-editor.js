@@ -75,6 +75,8 @@
       '<span class="muted">模板：</span><div class="tpl-group" id="reTplGroup">' +
       TEMPLATES.map(function (t) { return '<button class="tpl-btn' + (t === currentTpl ? " active" : "") + '" data-tpl="' + t + '">' + TEMPLATE_NAMES[t] + "</button>"; }).join("") +
       '</div><span style="flex:1"></span>' +
+      '<button class="btn btn-sm" id="reRestore" style="display:none">↩ 恢复上次编辑</button>' +
+      '<button class="btn btn-sm" id="reClearDraft">🗑 清空草稿</button>' +
       '<button class="btn btn-sm" id="rePrint">导出 PDF</button></div>' +
       '<div class="resume-editor-body">' +
       '<aside class="resume-editor-side"><h4>快捷调整</h4>' +
@@ -100,11 +102,61 @@
         email: overlay.querySelector("#reContact").value,
         phone: "", city: "", github: "",
       });
-      // 保留用户对页面内文字的修改：只重建外层结构，避免覆盖 contenteditable 内容
       page.innerHTML = buildResumeHtml(p, currentTpl);
       page.className = "resume-page resume-tpl-wrap " + currentTpl;
     }
     render();
+
+    // ===== 草稿自动保存 / 恢复（localStorage）=====
+    var DRAFT_KEY = "cp_resume_draft_v1";
+    function saveDraft() {
+      try {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+          t: Date.now(), tpl: currentTpl,
+          name: overlay.querySelector("#reName").value,
+          intent: overlay.querySelector("#reIntent").value,
+          contact: overlay.querySelector("#reContact").value,
+          html: page.innerHTML,
+        }));
+      } catch (e) { /* 隐私模式忽略 */ }
+    }
+    var saveTimer = null;
+    page.addEventListener("input", function () {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveDraft, 600);
+    });
+    ["reName", "reIntent", "reContact"].forEach(function (id) {
+      var f = overlay.querySelector("#" + id);
+      if (f) f.addEventListener("input", function () { clearTimeout(saveTimer); saveTimer = setTimeout(saveDraft, 600); });
+    });
+
+    function loadDraft() {
+      try {
+        var raw = localStorage.getItem(DRAFT_KEY);
+        if (!raw) return false;
+        var d = JSON.parse(raw);
+        if (!d || !d.html) return false;
+        currentTpl = d.tpl || currentTpl;
+        tplGroup.querySelectorAll(".tpl-btn").forEach(function (b) { b.classList.toggle("active", b.getAttribute("data-tpl") === currentTpl); });
+        page.innerHTML = d.html;
+        page.className = "resume-page resume-tpl-wrap " + currentTpl;
+        if (d.name != null) overlay.querySelector("#reName").value = d.name;
+        if (d.intent != null) overlay.querySelector("#reIntent").value = d.intent;
+        if (d.contact != null) overlay.querySelector("#reContact").value = d.contact;
+        return true;
+      } catch (e) { return false; }
+    }
+    var restored = loadDraft();
+    var restoreBtn = overlay.querySelector("#reRestore");
+    if (restored) { restoreBtn.style.display = ""; restoreBtn.setAttribute("data-has", "1"); }
+    restoreBtn.addEventListener("click", function () {
+      var has = loadDraft();
+      toastResume(has ? "已恢复上次编辑内容" : "没有可恢复的草稿");
+    });
+    overlay.querySelector("#reClearDraft").addEventListener("click", function () {
+      try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
+      toastResume("草稿已清空");
+    });
 
     tplGroup.addEventListener("click", function (e) {
       var btn = e.target.closest(".tpl-btn");
@@ -112,11 +164,21 @@
       currentTpl = btn.getAttribute("data-tpl");
       tplGroup.querySelectorAll(".tpl-btn").forEach(function (b) { b.classList.toggle("active", b === btn); });
       render();
+      saveDraft();
     });
 
-    overlay.querySelector("#rePrint").addEventListener("click", function () { window.print(); });
-    overlay.querySelector("#reCloseEditor").addEventListener("click", function () { overlay.remove(); });
-    overlay.addEventListener("click", function (e) { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector("#rePrint").addEventListener("click", function () {
+      saveDraft();
+      window.print();
+    });
+    overlay.querySelector("#reCloseEditor").addEventListener("click", function () { saveDraft(); overlay.remove(); });
+    overlay.addEventListener("click", function (e) { if (e.target === overlay) { saveDraft(); overlay.remove(); } });
+  }
+
+  function toastResume(msg) {
+    try {
+      if (typeof toast === "function") toast(msg);
+    } catch (e) {}
   }
 
   /* 解析生成简历的 Markdown → 结构化档案，供编辑器使用 */
