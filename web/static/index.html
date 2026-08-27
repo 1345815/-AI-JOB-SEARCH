@@ -213,6 +213,17 @@
           <label class="field"><span>模型名称</span><div class="flex" style="gap:8px"><input id="llmModel" list="llmModelOptions" type="text" placeholder="deepseek-chat" style="flex:1"><button class="btn btn-sm" id="detectModels" type="button">自动识别模型</button></div><datalist id="llmModelOptions"></datalist></label>
           <div id="llmTestStatus" class="muted" role="status" aria-live="polite">尚未测试连接。保存后建议先测试一次。</div>
           <div class="privacy-block">
+            <strong>填表插件</strong>
+            <p class="muted">「AI 填网申」浏览器插件凭此令牌读取你的档案，在任意企业网申页面自动填表。令牌仅本人可见，泄露可随时轮换。</p>
+            <div class="flex" style="gap:8px;flex-wrap:wrap">
+              <input id="extTokenBox" type="text" readonly placeholder="点击「获取插件令牌」" style="flex:1;min-width:220px;padding:6px 10px;border:1px solid var(--border-strong);border-radius:6px;font-size:12px">
+              <button class="btn btn-sm" id="getExtToken" type="button">获取令牌</button>
+              <button class="btn btn-sm" id="copyExtToken" type="button">复制</button>
+              <button class="btn btn-sm" id="rotateExtToken" type="button" style="color:var(--danger)">轮换（使旧令牌失效）</button>
+            </div>
+            <p class="muted text-sm mt-8">安装方法：下载 <code>tools/autofill-extension</code> 目录 → Chrome <code>chrome://extensions</code> → 开启开发者模式 → 加载已解压的扩展程序 → 在扩展弹窗填本服务地址 + 令牌。</p>
+          </div>
+          <div class="privacy-block">
             <strong>隐私与数据</strong>
             <p class="muted">你的简历、档案、岗位与对话只保存在本服务器。可随时导出全部数据，或注销账号彻底删除。</p>
             <div class="flex" style="gap:8px">

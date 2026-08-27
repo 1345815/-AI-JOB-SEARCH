@@ -2699,6 +2699,26 @@
     el("settingsToggle").addEventListener("click", openSettings);
     el("exportMyData").addEventListener("click", exportMyData);
     el("deleteMyAccount").addEventListener("click", deleteMyAccount);
+    el("getExtToken").addEventListener("click", async function () {
+      try {
+        var res = await api("ext/token");
+        if (res && res.token) { el("extTokenBox").value = res.token; toast("令牌已获取", "success"); }
+        else toast("获取失败", "error");
+      } catch (e) { toast("获取失败：" + e.message, "error"); }
+    });
+    el("copyExtToken").addEventListener("click", function () {
+      var box = el("extTokenBox");
+      if (!box.value) { toast("先点击「获取令牌」", "error"); return; }
+      box.select(); document.execCommand("copy");
+      toast("已复制", "success");
+    });
+    el("rotateExtToken").addEventListener("click", async function () {
+      if (!confirm("轮换后旧令牌立即失效，插件需更新令牌。继续？")) return;
+      try {
+        var res = await api("ext/token/rotate", { method: "POST" });
+        if (res && res.token) { el("extTokenBox").value = res.token; toast("令牌已轮换", "success"); }
+      } catch (e) { toast("轮换失败：" + e.message, "error"); }
+    });
     el("saveSettings").addEventListener("click", saveSettings);
     el("testSettings").addEventListener("click", async function () {
       var button = el("testSettings");

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>CareerPilot 填网申</title>
+<style>
+  body { width: 320px; margin: 0; padding: 14px; font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #1e293b; }
+  h1 { font-size: 15px; margin: 0 0 4px; }
+  p { margin: 0 0 12px; font-size: 12px; color: #64748b; }
+  label { display: block; font-size: 12px; color: #475569; margin: 8px 0 3px; }
+  input { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12.5px; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  button { flex: 1; padding: 8px 0; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  #saveBtn { background: #2563eb; color: #fff; }
+  #testBtn { background: #eef2f7; color: #334155; }
+  #status { margin-top: 10px; font-size: 12px; min-height: 16px; }
+  .ok { color: #16a34a; }
+  .err { color: #dc2626; }
+</style>
+</head>
+<body>
+  <h1>🤖 CareerPilot AI 填网申</h1>
+  <p>在任意企业网申页面点右下角「AI 填表」，用你的 CareerPilot 档案自动填充。</p>
+  <label>服务地址</label>
+  <input id="cpBase" placeholder="https://你的域名:8000 或 http://127.0.0.1:8000">
+  <label>插件令牌（CareerPilot 设置页获取）</label>
+  <input id="cpToken" type="password" placeholder="cp_ext_...">
+  <div class="row">
+    <button id="saveBtn">保存</button>
+    <button id="testBtn">测试连接</button>
+  </div>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

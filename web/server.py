@@ -391,6 +391,12 @@ def init_db():
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS ext_tokens (
+                user_id INTEGER PRIMARY KEY,
+                token TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
@@ -637,8 +643,7 @@ def get_user_by_token(token):
             """SELECT u.* FROM users u
                JOIN sessions s ON s.user_id = u.id
                WHERE s.token=? AND s.expires_at > datetime('now', 'localtime')""",
-            (token,),
-        ).fetchone()
+            (token,),        ).fetchone()
         conn.close()
     return dict(row) if row else None
 
@@ -659,6 +664,67 @@ def touch_session(token):
                 conn.execute("UPDATE sessions SET expires_at=? WHERE token=?",(time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(time.time()+SESSION_MAX_AGE_DAYS*86400)),token)); conn.commit()
         row=conn.execute("SELECT expires_at FROM sessions WHERE token=?",(token,)).fetchone(); conn.close()
     return row["expires_at"] if row else None
+
+
+def get_ext_token(user_id):
+    """查询或生成填表插件令牌（长期有效，用于第三方网站跨域取档案）。"""
+    with _DB_LOCK:
+        conn = db()
+        row = conn.execute("SELECT token FROM ext_tokens WHERE user_id=?", (user_id,)).fetchone()
+        if row:
+            token = row["token"]
+        else:
+            token = "cp_ext_" + secrets.token_hex(24)
+            conn.execute("INSERT INTO ext_tokens (user_id, token) VALUES (?,?)", (user_id, token))
+            conn.commit()
+        conn.close()
+    return token
+
+
+def rotate_ext_token(user_id):
+    """重新生成插件令牌（旧令牌立即失效）。"""
+    token = "cp_ext_" + secrets.token_hex(24)
+    with _DB_LOCK:
+        conn = db()
+        conn.execute("INSERT OR REPLACE INTO ext_tokens (user_id, token) VALUES (?,?)", (user_id, token))
+        conn.commit()
+        conn.close()
+    return token
+
+
+def get_user_by_ext_token(token):
+    """按插件令牌取用户，失败返回 None。"""
+    if not token or not token.startswith("cp_ext_"):
+        return None
+    with _DB_LOCK:
+        conn = db()
+        row = conn.execute(
+            """SELECT u.* FROM users u JOIN ext_tokens e ON e.user_id=u.id WHERE e.token=?""",
+            (token,),
+        ).fetchone()
+        conn.close()
+    return dict(row) if row else None
+
+
+def profile_for_ext(user):
+    """插件专用档案（脱敏：不含任何密钥，仅填表所需字段）。"""
+    p = normalize_profile(_safe_json(user.get("profile_json"), {}))
+    return {
+        "name": p.get("name", ""),
+        "phone": p.get("phone", ""),
+        "email": p.get("email", ""),
+        "city": p.get("city", ""),
+        "birth": p.get("birth_date", "") or p.get("birthday", ""),
+        "gender": p.get("gender", ""),
+        "school": (p.get("education") or [{}])[0].get("school", ""),
+        "degree": (p.get("education") or [{}])[0].get("degree", ""),
+        "major": (p.get("education") or [{}])[0].get("detail", "") or p.get("major", ""),
+        "graduation": p.get("graduation_date", ""),
+        "english_level": p.get("english_level", ""),
+        "status": p.get("status", ""),
+        "skills": (p.get("skills") or {}).get("strong", [])[:20],
+        "experiences": [{"company": e.get("company"), "title": e.get("title")} for e in p.get("experiences", [])][:6],
+    }
 
 
 def user_public(user):
@@ -2958,6 +3024,10 @@ class Handler(BaseHTTPRequestHandler):
         if head == "auth":
             return self._api_auth(method, parts[1:])
 
+        # 填表插件专用：ext token 认证，跨域取档案（无需登录 cookie）
+        if head == "ext":
+            return self._api_ext(method, parts[1:])
+
         user = self._current_user()
         if not user:
             self._send(401, {"ok": False, "error": "未登录或会话已过期"})
@@ -3770,6 +3840,37 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(404, {"ok": False, "error": "not found"})
 
+    def _api_ext(self, method, parts):
+        """填表插件 API：CORS 开放，profile 用 ext token 认证。"""
+        cors = {"Access-Control-Allow-Origin": "*"}
+        if not parts:
+            self._send(404, {"ok": False, "error": "not found"}, extra=cors)
+            return
+        if parts[0] == "profile" and method == "GET":
+            auth = self.headers.get("Authorization", "")
+            token = auth[7:] if auth.startswith("Bearer ") else ""
+            user = get_user_by_ext_token(token.strip())
+            if not user:
+                self._send(401, {"ok": False, "error": "插件令牌无效，请在 CareerPilot 设置页重新获取"}, extra=cors)
+                return
+            self._send(200, {"ok": True, "profile": profile_for_ext(user)}, extra=cors)
+            return
+        if parts[0] == "token" and method == "GET":
+            user = self._current_user()
+            if not user:
+                self._send(401, {"ok": False, "error": "未登录"}, extra=cors)
+                return
+            self._send(200, {"ok": True, "token": get_ext_token(user["id"]), "note": "该令牌用于填表插件跨域读取档案，仅本人可见"}, extra=cors)
+            return
+        if parts[0] == "token" and len(parts) >= 2 and parts[1] == "rotate" and method == "POST":
+            user = self._current_user()
+            if not user:
+                self._send(401, {"ok": False, "error": "未登录"}, extra=cors)
+                return
+            self._send(200, {"ok": True, "token": rotate_ext_token(user["id"])}, extra=cors)
+            return
+        self._send(404, {"ok": False, "error": "not found"}, extra=cors)
+
     def _api_auth(self, method, parts):
         action = parts[0] if parts else ""
         if action == "register" and method == "POST":
@@ -3946,6 +4047,15 @@ class Handler(BaseHTTPRequestHandler):
             self._api("GET", parts)
         else:
             self._serve_static(path)
+
+    def do_OPTIONS(self):
+        # CORS 预检：插件跨域访问 /api/ext/*
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.end_headers()
 
     def do_POST(self):
         if self._reject_oversized_body():

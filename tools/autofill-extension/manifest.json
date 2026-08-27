@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "CareerPilot AI 填网申",
+  "version": "1.0.0",
+  "description": "在任意企业网申页面，用 CareerPilot 档案一键自动填表",
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "CareerPilot 填网申"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
