@@ -155,6 +155,9 @@ def _extract_education(lines, section):
     education, sources = [], []
     candidates = section or lines
     for index, line in enumerate(candidates):
+        # 竞赛/获奖类行（如“中国大学生工程实践与创新能力大赛”）不是教育背景
+        if re.search(r"大赛|竞赛|奖", line):
+            continue
         school_match = re.search(r"([\u4e00-\u9fa5A-Za-z]{2,40}(?:大学|学院|学校|University|College))", line, re.I)
         if not school_match:
             continue
@@ -253,7 +256,11 @@ def _extract_skills(lines, section):
                 skills.extend(re.split(r"[,，;；、/|｜\s]+", right.strip()))
         elif len(line) <= 60 and re.search(r"[,，、/]", line) and not re.search(r"[。！？.!?]", line):
             skills.extend(re.split(r"[,，、/|｜\s]+", line))
-    cleaned = [skill for skill in _unique(skills) if 1 < len(skill) <= 24 and not re.search(r"^(熟悉|掌握|了解|具备)$", skill) and not re.search(r"[。；;！？]", skill)]
+    cleaned = [skill for skill in _unique(skills)
+               if 1 < len(skill) <= 24
+               and not re.search(r"[（(]", skill)  # 过滤 "Python（熟练）" 类带括号冗余
+               and not re.search(r"^(熟悉|掌握|了解|具备|编程语言|语言|技术|工具|技能|框架|平台)$", skill)
+               and not re.search(r"[。；;！？]", skill)]
     return cleaned[:30], _source(content)
 
 
