@@ -1639,6 +1639,111 @@
     }).catch(function () {});
   }
 
+  function renderCampus() {
+    var html =
+      '<div class="page-head"><div><h1>校招汇总</h1><p>把看到的校招/实习公告贴进来，AI 自动抽出公司、截止时间、网申链接，统一管理不遗漏。对标「校招网申汇总表」。</p></div>' +
+      '<div class="page-actions"><button class="btn" id="campusExport">导出 CSV</button></div></div>' +
+      '<div class="panel mb-14"><div class="panel-head"><strong>AI 提取</strong><span class="sub">粘贴公告文本（可多段），自动识别多条招聘信息</span></div>' +
+      '<div class="panel-body"><textarea id="campusText" rows="4" placeholder="粘贴校招/实习公告，例如：&#10;美团 2027 届校园招聘启动，网申截止 2027-01-15，工作地点北京/上海，https://campus.meituan.com&#10;字节跳动实习生招聘，Base 深圳……" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border-strong);border-radius:8px"></textarea>' +
+      '<div class="flex mt-8" style="gap:8px"><button class="btn btn-primary" id="campusExtract">🤖 AI 提取并入库</button><span class="muted text-sm" id="campusExtractStatus"></span></div></div></div>' +
+      '<div class="panel mb-14"><div class="panel-head"><strong>手动添加</strong></div><div class="panel-body"><div class="form-grid">' +
+      '<label class="field"><span>公司 <em>*</em></span><input id="cAddCompany" placeholder="公司名"></label>' +
+      '<label class="field"><span>岗位/方向</span><input id="cAddTitle" placeholder="如：后端开发 / 提前批"></label>' +
+      '<label class="field"><span>类型</span><select id="cAddType"><option>校招</option><option>实习</option></select></label>' +
+      '<label class="field"><span>地点</span><input id="cAddLoc" placeholder="北京/上海"></label>' +
+      '<label class="field"><span>截止日期</span><input id="cAddDeadline" type="date"></label>' +
+      '<label class="field"><span>网申链接</span><input id="cAddLink" placeholder="https://"></label>' +
+      '<label class="field"><span>备注</span><input id="cAddNote" placeholder="招聘对象等"></label>' +
+      "</div><div class=\"form-actions\"><button class=\"btn btn-primary\" id=\"campusAdd\">添加</button></div></div></div>" +
+      '<div class="panel"><div class="panel-head"><strong>我的汇总</strong><span class="sub" id="campusCount"></span></div>' +
+      '<div class="panel-body" style="padding:0"><div id="campusListPanel"><div class="loading"><div class="spinner"></div></div></div></div></div>';
+    el("app").innerHTML = html;
+    bindCampus();
+  }
+
+  function campusDeadlineClass(d) {
+    if (!d) return "";
+    var days = Math.ceil((new Date(d + "T00:00:00") - new Date()) / 86400000);
+    return days < 0 ? "tag-danger" : days <= 7 ? "tag-warn" : "";
+  }
+
+  async function bindCampus() {
+    var status = el("campusExtractStatus");
+    el("campusExtract").addEventListener("click", async function () {
+      var text = el("campusText").value.trim();
+      if (!text) { toast("请先粘贴公告文本", "error"); return; }
+      var btn = el("campusExtract");
+      btn.disabled = true; btn.textContent = "提取中…";
+      status.textContent = "";
+      try {
+        var res = await api("campus/extract", { method: "POST", body: { text: text } });
+        var n = (res && res.count) || 0;
+        status.textContent = n ? "✓ 已入库 " + n + " 条" : (res && res.note) || "未提取到信息";
+        if (n) { el("campusText").value = ""; loadCampusList(); }
+      } catch (e) { status.textContent = "提取失败：" + e.message; }
+      finally { btn.disabled = false; btn.textContent = "🤖 AI 提取并入库"; }
+    });
+    el("campusAdd").addEventListener("click", async function () {
+      var company = el("cAddCompany").value.trim();
+      if (!company) { toast("请填写公司名", "error"); return; }
+      try {
+        await api("campus", { method: "POST", body: {
+          company: company, title: el("cAddTitle").value.trim(), ptype: el("cAddType").value,
+          location: el("cAddLoc").value.trim(), deadline: el("cAddDeadline").value,
+          link: el("cAddLink").value.trim(), note: el("cAddNote").value.trim(),
+        } });
+        ["cAddCompany", "cAddTitle", "cAddLoc", "cAddDeadline", "cAddLink", "cAddNote"].forEach(function (id) { el(id).value = ""; });
+        toast("已添加", "success");
+        loadCampusList();
+      } catch (e) { toast("添加失败：" + e.message, "error"); }
+    });
+    el("campusExport").addEventListener("click", async function () {
+      try {
+        var res = await api("campus/export");
+        var csv = (res && res.csv) || "";
+        if (!csv) { toast("汇总表为空", "error"); return; }
+        var blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob); a.download = "校招汇总.csv"; a.click();
+        toast("已导出 CSV", "success");
+      } catch (e) { toast("导出失败：" + e.message, "error"); }
+    });
+    loadCampusList();
+  }
+
+  async function loadCampusList() {
+    var panel = el("campusListPanel");
+    if (!panel) return;
+    var rows;
+    try {
+      var res = await api("campus");
+      rows = res || [];
+    } catch (e) { panel.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + "</div>"; return; }
+    var count = el("campusCount");
+    if (count) count.textContent = rows.length + " 条";
+    if (!rows.length) {
+      panel.innerHTML = '<div class="empty"><strong>还没有汇总</strong><span>粘贴校招公告让 AI 提取，或手动添加。</span></div>';
+      return;
+    }
+    panel.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+      "<th>公司</th><th>岗位/方向</th><th>类型</th><th>地点</th><th>截止</th><th>网申链接</th><th></th></tr></thead><tbody>" +
+      rows.map(function (r) {
+        return "<tr><td><strong>" + esc(r.company) + "</strong>" + (r.note ? '<div class="muted text-sm">' + esc(r.note) + "</div>" : "") + "</td>" +
+          "<td>" + esc(r.title || "—") + "</td><td>" + esc(r.ptype) + "</td><td>" + esc(r.location || "—") + "</td>" +
+          '<td><span class="tag ' + campusDeadlineClass(r.deadline) + '">' + esc(r.deadline || "待定") + "</span></td>" +
+          "<td>" + (r.link ? '<a href="' + esc(r.link) + '" target="_blank" rel="noopener" class="btn btn-sm">打开</a>' : "—") + "</td>" +
+          '<td><button class="icon-btn" data-campus-del="' + r.id + '" title="删除">×</button></td></tr>';
+      }).join("") + "</tbody></table></div>";
+    panel.querySelectorAll("[data-campus-del]").forEach(function (btn) {
+      btn.addEventListener("click", async function () {
+        try {
+          await api("campus/" + btn.getAttribute("data-campus-del"), { method: "DELETE" });
+          loadCampusList();
+        } catch (e) { toast("删除失败：" + e.message, "error"); }
+      });
+    });
+  }
+
   function renderProfile() {
     var p = state.profile || {};
     var skills = p.skills || {};
@@ -2550,6 +2655,7 @@
     else if (state.view === "pipeline") renderPipeline();
     else if (state.view === "interview") renderInterview();
     else if (state.view === "profile") renderProfile();
+    else if (state.view === "campus") renderCampus();
     else if (state.view === "admin") renderAdmin();
     else if (state.view === "team") renderTeam();
   }

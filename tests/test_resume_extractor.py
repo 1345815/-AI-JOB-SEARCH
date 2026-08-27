@@ -594,3 +594,20 @@ def test_resume_modes_prompt_injection(monkeypatch):
     assert "STAR" in seen["sys"]
     server_mod.generate_resume(job, profile)
     assert "档位要求" not in seen["sys"]
+
+
+def test_extract_campus_info(monkeypatch):
+    """校招公告 AI 提取：多条目解析 / 无 AI 空 / 空文本空。"""
+    import server as server_mod
+    monkeypatch.setattr(server_mod, "llm_available", lambda: True)
+    monkeypatch.setattr(server_mod, "llm_chat", lambda m, system=None:
+        '[{"company":"美团","title":"2027届校招","ptype":"校招","location":"北京","deadline":"2027-01-15",'
+        '"link":"https://campus.meituan.com","note":""},'
+        '{"company":"字节","title":"实习","ptype":"实习","location":"深圳","deadline":"","link":"","note":""}]')
+    items = server_mod.extract_campus_info("美团2027届校招，截止2027-01-15，https://campus.meituan.com；字节实习")
+    assert len(items) == 2 and items[0]["company"] == "美团" and items[0]["deadline"] == "2027-01-15"
+    assert items[1]["ptype"] == "实习"
+    monkeypatch.setattr(server_mod, "llm_available", lambda: False)
+    assert server_mod.extract_campus_info("文本") == []
+    monkeypatch.setattr(server_mod, "llm_available", lambda: True)
+    assert server_mod.extract_campus_info("") == []

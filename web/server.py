@@ -377,6 +377,20 @@ def init_db():
                 updated_at TEXT DEFAULT (datetime('now', 'localtime')),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS campus_postings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                company TEXT NOT NULL,
+                title TEXT DEFAULT '',
+                ptype TEXT DEFAULT '校招',
+                location TEXT DEFAULT '',
+                target_degree TEXT DEFAULT '',
+                deadline TEXT DEFAULT '',
+                link TEXT DEFAULT '',
+                note TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
@@ -2142,6 +2156,51 @@ def diagnose_system(user=None):
     return items
 
 
+def extract_campus_info(text):
+    """AI 从校招公告文本提取多条网申信息，返回结构化列表。失败返回空列表。"""
+    if not text or not text.strip():
+        return []
+    if not llm_available():
+        return []
+    system = (
+        "你是校招信息整理助手。从用户粘贴的校招/实习公告文本中提取招聘信息条目。"
+        "输出严格 JSON 数组（不要代码块），每项字段："
+        '{"company": "公司名", "title": "岗位/项目方向（可空字符串）", "ptype": "校招或实习", '
+        '"location": "工作地点（可空）", "target_degree": "招聘对象学历（可空）", '
+        '"deadline": "网申截止日期 YYYY-MM-DD（无明确日期填空字符串）", "link": "网申链接（可空）", "note": "一句话要点（可空）"}。'
+        "只提取明确出现在文本中的信息，不要编造；没有对应信息就填空字符串。"
+    )
+    try:
+        content = llm_chat([{"role": "user", "content": "公告文本：\n" + text[:8000]}], system=system)
+        if not content:
+            return []
+        content = content.strip().strip("`")
+        if content.startswith("json"):
+            content = content[4:]
+        data = json.loads(content)
+        if isinstance(data, dict):
+            data = data.get("items") or data.get("entries") or []
+        if not isinstance(data, list):
+            return []
+        items = []
+        for d in data[:50]:
+            if not isinstance(d, dict) or not str(d.get("company", "")).strip():
+                continue
+            items.append({
+                "company": str(d.get("company", "")).strip()[:80],
+                "title": str(d.get("title", "")).strip()[:120],
+                "ptype": "实习" if "实习" in str(d.get("ptype", "")) else "校招",
+                "location": str(d.get("location", "")).strip()[:60],
+                "target_degree": str(d.get("target_degree", "")).strip()[:60],
+                "deadline": str(d.get("deadline", "")).strip()[:20],
+                "link": str(d.get("link", "")).strip()[:300],
+                "note": str(d.get("note", "")).strip()[:200],
+            })
+        return items
+    except Exception:
+        return []
+
+
 def generate_cover_letter(job, profile=None):
     profile = profile or {}
     if profile_is_empty(profile):
@@ -3414,6 +3473,86 @@ class Handler(BaseHTTPRequestHandler):
                 ).fetchall()
                 conn.close()
             self._send(200, [dict(r) for r in rows])
+            return
+
+        if head == "campus" and method == "GET":
+            with _DB_LOCK:
+                conn = db()
+                rows = conn.execute(
+                    "SELECT * FROM campus_postings WHERE user_id=? ORDER BY "
+                    "(deadline='') ASC, deadline ASC, created_at DESC",
+                    (user["id"],),
+                ).fetchall()
+                conn.close()
+            self._send(200, [dict(r) for r in rows])
+            return
+
+        if head == "campus" and method == "POST":
+            body = self._json_body()
+            company = (body.get("company") or "").strip()
+            if not company:
+                self._send(400, {"ok": False, "error": "公司名不能为空"})
+                return
+            with _DB_LOCK:
+                conn = db()
+                cur = conn.execute(
+                    "INSERT INTO campus_postings (user_id, company, title, ptype, location, target_degree, deadline, link, note) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (user["id"], company, (body.get("title") or "").strip(), (body.get("ptype") or "校招").strip(),
+                     (body.get("location") or "").strip(), (body.get("target_degree") or "").strip(),
+                     (body.get("deadline") or "").strip(), (body.get("link") or "").strip(), (body.get("note") or "").strip()),
+                )
+                conn.commit()
+                row = conn.execute("SELECT * FROM campus_postings WHERE id=?", (cur.lastrowid,)).fetchone()
+                conn.close()
+            self._send(200, dict(row))
+            return
+
+        if head == "campus" and len(parts) >= 2 and parts[1] == "extract" and method == "POST":
+            body = self._json_body()
+            text = (body or {}).get("text") or ""
+            items = extract_campus_info(text)
+            if not items:
+                self._send(200, {"ok": True, "data": [], "note": "未能从文本中提取（AI 未启用或内容无招聘信息）"})
+                return
+            saved = []
+            with _DB_LOCK:
+                conn = db()
+                for it in items:
+                    cur = conn.execute(
+                        "INSERT INTO campus_postings (user_id, company, title, ptype, location, target_degree, deadline, link, note) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        (user["id"], it["company"], it["title"], it["ptype"], it["location"],
+                         it["target_degree"], it["deadline"], it["link"], it["note"]),
+                    )
+                    saved.append(cur.lastrowid)
+                conn.commit()
+                rows = conn.execute("SELECT * FROM campus_postings WHERE id IN (%s)" % ",".join("?" * len(saved)), tuple(saved)).fetchall()
+                conn.close()
+            self._send(200, {"ok": True, "data": [dict(r) for r in rows], "count": len(saved)})
+            return
+
+        if head == "campus" and len(parts) >= 2 and parts[1] == "export" and method == "GET":
+            import io, csv as csv_mod
+            with _DB_LOCK:
+                conn = db()
+                rows = conn.execute("SELECT * FROM campus_postings WHERE user_id=? ORDER BY deadline ASC", (user["id"],)).fetchall()
+                conn.close()
+            buf = io.StringIO()
+            w = csv_mod.writer(buf)
+            w.writerow(["公司", "岗位/方向", "类型", "地点", "招聘对象", "截止日期", "网申链接", "备注"])
+            for r in rows:
+                w.writerow([r["company"], r["title"], r["ptype"], r["location"], r["target_degree"], r["deadline"], r["link"], r["note"]])
+            self._send(200, {"ok": True, "csv": buf.getvalue()})
+            return
+
+        if head == "campus" and len(parts) >= 2 and method == "DELETE":
+            with _DB_LOCK:
+                conn = db()
+                conn.execute("DELETE FROM campus_postings WHERE id=? AND user_id=?", (parts[1], user["id"]))
+                conn.commit()
+                conn.close()
+            self._send(200, {"ok": True})
             return
 
         if head in ("help-records", "help_records") and method == "GET":

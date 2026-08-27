@@ -955,3 +955,11 @@ body { background: radial-gradient(circle at 85% -10%, rgba(14,143,123,.08), tra
 .ai-status-banner.warn { background: var(--warning-soft, #fff8e6); color: var(--warning, #9a6b00); border: 1px solid var(--warning-border, #f0d78a); }
 .ai-status-banner.off { background: #f3f4f6; color: #6b7280; border: 1px solid #e5e7eb; }
 .text-success { color: var(--success, #1a7f37); }
+
+/* ===== 校招汇总表格 ===== */
+.table-wrap { overflow-x: auto; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th { text-align: left; padding: 10px 12px; background: var(--bg-soft, #f8fafc); color: var(--text-muted, #64748b); font-weight: 600; border-bottom: 1px solid var(--border-strong, #e2e8f0); white-space: nowrap; }
+.data-table td { padding: 10px 12px; border-bottom: 1px solid var(--border, #eef2f7); vertical-align: top; }
+.data-table tbody tr:hover { background: var(--bg-soft, #f8fafc); }
+.data-table .icon-btn { color: #dc2626; }
