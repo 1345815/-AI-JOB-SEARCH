@@ -70,6 +70,13 @@ E:\WorkBuddy\repos\-AI-JOB-SEARCH
 
 `E:\WorkBuddy\backup\AI-JOB-SEARCH-backup-20260822-1748` 仅用于回溯，不要在备份目录继续开发或启动服务。
 
+## 重要恢复事实
+
+- Codex 原有的 `web/agents/` 提交对象已丢失，磁盘文件和备份中也不存在。当前已按现有测试契约重新恢复核心多 Agent 编排包：包含 Agent 注册协议、并发队列、内置 Agent 和 `CareerPilotOrchestrator.execute/execute_async`。它恢复了核心编排能力，但不等同于原提交中的全部业务实现；分布式持久化仍由 `web/tasks.py` 和 `web/worker.py` 负责。
+- `authz`、`cache`、`job_extractor` 等两边都修改过的文件，当前保留的是生产主线版本。这是有意取舍，因为 Codex 版本基于旧主线，直接合并可能覆盖生产修复。
+- 后续 Codex 改动应及时提交并推送，不要长期积攒未推送提交。也可以让 Codex 直接在本 E 盘仓库工作，避免再次发生分支和目录分裂。
+- `codex-backup/` 仅作为备份保留。确认当前主线和资产无误后，再由用户决定是否删除；WorkBuddy 不要擅自删除。
+
 ## 参考文档
 
 - `README.md`：项目完整说明和功能介绍
@@ -78,4 +85,3 @@ E:\WorkBuddy\repos\-AI-JOB-SEARCH
 - `DEPLOY.md`：Docker 和服务器部署
 - `PRODUCT_ROADMAP.md`：产品后续规划
 - `REPOSITORY_UNIFICATION.md`：仓库合并记录
-
