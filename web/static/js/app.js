@@ -185,7 +185,7 @@
     var scoreText = needs ? "—" : score;
     var trust = jobTrust(job);
     var source = '<span class="tag ' + trust.cls + '">' + esc(trust.label) + '</span>' + (job.source === "freehire" ? '<span class="tag tag-info">FreeHire ATS</span>' : '');
-    if (job.quality_score) source += '<span class="tag ' + (job.quality_score >= 80 ? 'tag-accent' : job.quality_score >= 55 ? 'tag-warn' : 'tag-danger') + '">质量 ' + esc(job.quality_score) + ' · ' + esc(job.quality_label || '建议核实') + '</span>';
+    if (job.quality_score) source += '<span class="tag ' + (job.quality_score >= 80 ? 'tag-accent' : job.quality_score >= 55 ? 'tag-warn' : 'tag-danger') + '">质量 ' + esc(job.quality_score) + '</span>';
     var prefilter = ev.gates && ev.gates.prefilter;
     var prefilterTag = prefilter ? '<span class="tag ' + (prefilter.status === "recommend" ? "tag-accent" : prefilter.status === "reject" ? "tag-danger" : "tag-warn") + '">' + esc(prefilter.label) + '</span>' : "";
     var deadline = deadlineTag(job.deadline);
@@ -197,14 +197,21 @@
           ? '<span class="tag tag-accent">已在岗位库</span>'
           : '<button class="btn btn-sm btn-primary" data-add-search="' + searchIndex + '">加入岗位库</button>';
     }
+    var summaryLine = "";
+    if (ev.summary && !needs) {
+      var sm = ev.summary.split("。")[0].replace(/^综合匹配 \d+\/100/, "").replace(/^[（(]?/, "");
+      summaryLine = '<div class="job-card-summary">' + esc(sm.slice(0, 42) || ev.summary.slice(0, 42)) + "</div>";
+    }
     return (
-      '<div class="list-row job-item' + (state.selectedJobId === job.id && !searchResult ? " selected" : "") + '" data-job="' + esc(job.id) + '"' + (searchResult ? ' data-search-result="true"' : "") + ">" +
-      '<span class="score-badge ' + cls + '">' + scoreText + "</span>" +
-      '<div class="row-main">' +
-      '<div class="row-title-wrap"><span class="row-title">' + esc(job.title) + "</span>" + source + prefilterTag + "</div>" +
-      '<div class="row-sub">' + esc(job.company) + " · " + esc(job.city) + " · " + esc(job.salary || "薪资未标注") + "</div>" +
+      '<div class="job-card' + (state.selectedJobId === job.id && !searchResult ? " selected" : "") + '" data-job="' + esc(job.id) + '"' + (searchResult ? ' data-search-result="true"' : "") + ">" +
+      '<div class="job-card-score ' + cls + '">' + scoreText + "</div>" +
+      '<div class="job-card-main">' +
+      '<div class="job-card-title">' + esc(job.title) + "</div>" +
+      '<div class="job-card-meta">' + esc(job.company) + (job.city ? " · " + esc(job.city) : "") + (job.salary ? " · " + esc(job.salary) : "") + "</div>" +
+      summaryLine +
+      '<div class="job-card-tags">' + source + prefilterTag + deadline + "</div>" +
       "</div>" +
-      '<div class="row-meta">' + deadline + searchAction + "</div>" +
+      (searchAction ? '<div class="job-card-action">' + searchAction + "</div>" : "") +
       "</div>"
     );
   }
@@ -1076,7 +1083,7 @@
   }
 
   function bindJobItems() {
-    document.querySelectorAll(".job-item[data-job]:not([data-search-result])").forEach(function (item) {
+    document.querySelectorAll(".job-card[data-job]:not([data-search-result])").forEach(function (item) {
       item.addEventListener("click", function () {
         state.selectedJobId = item.getAttribute("data-job");
         if (state.view === "jobs") renderJobs();

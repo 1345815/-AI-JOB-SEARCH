@@ -995,3 +995,22 @@ body { background: radial-gradient(circle at 85% -10%, rgba(14,143,123,.08), tra
 .tour-dot.active { background: #2563eb; width: 20px; border-radius: 4px; }
 .tour-foot { display: flex; justify-content: space-between; align-items: center; padding: 14px 30px 20px; }
 .tour-foot .btn-skip { border: none; background: none; color: #94a3b8; cursor: pointer; font-size: 13px; }
+
+/* ===== 岗位卡片流（浏览器式浏览） ===== */
+.jobs-layout { display: grid; grid-template-columns: minmax(340px, 42%) 1fr; gap: 14px; align-items: start; }
+.jobs-detail { min-width: 0; position: sticky; top: 12px; max-height: calc(100vh - 90px); overflow-y: auto; }
+@media (max-width: 960px) { .jobs-layout { grid-template-columns: 1fr; } .jobs-detail { position: static; max-height: none; } }
+.job-card { display: flex; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border, #eef2f7); cursor: pointer; transition: background .1s ease; }
+.job-card:hover { background: #f8faff; }
+.job-card.selected { background: linear-gradient(90deg, #eff6ff, #f8faff); border-left: 3px solid #2563eb; padding-left: 11px; }
+.job-card-score { flex-shrink: 0; width: 46px; height: 46px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 600; }
+.job-card-score.zero { background: #f1f5f9; color: #94a3b8; }
+.job-card-score.good { background: #dcfce7; color: #15803d; }
+.job-card-score.mid { background: #fef3c7; color: #b45309; }
+.job-card-score.low { background: #fee2e2; color: #b91c1c; }
+.job-card-main { flex: 1; min-width: 0; }
+.job-card-title { font-size: 14.5px; font-weight: 600; color: #0f172a; line-height: 1.4; margin-bottom: 3px; }
+.job-card-meta { font-size: 12.5px; color: #64748b; margin-bottom: 5px; }
+.job-card-summary { font-size: 12px; color: #475569; margin-bottom: 6px; line-height: 1.5; }
+.job-card-tags { display: flex; gap: 5px; flex-wrap: wrap; }
+.job-card-action { flex-shrink: 0; align-self: center; }
