@@ -994,25 +994,40 @@ def mark_saved_search_results(results):
     return output
 
 
+def _find_existing_job(conn, job):
+    """在给定连接上按 id / 归一化 URL / 标题公司城市 查重，返回已存在 id 或 None。"""
+    job_id = job.get("id")
+    if job_id:
+        row = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if row:
+            return row["id"]
+    if job.get("url"):
+        normalized_url = normalize_job_url(job.get("url"))
+        if normalized_url:
+            rows = conn.execute("SELECT id, url FROM jobs WHERE url IS NOT NULL AND url != ''").fetchall()
+            found = next((row for row in rows if normalize_job_url(row["url"]) == normalized_url), None)
+            if found:
+                return found["id"]
+    if job.get("title") and job.get("company"):
+        row = conn.execute(
+            "SELECT id FROM jobs WHERE lower(title)=lower(?) AND lower(company)=lower(?) AND coalesce(city,'')=coalesce(?, '') LIMIT 1",
+            (job.get("title"), job.get("company"), job.get("city", "")),
+        ).fetchone()
+        if row:
+            return row["id"]
+    return None
+
+
 def add_job(job):
     job_id = job.get("id") or f"job-{int(time.time() * 1000)}"
     now = time.strftime("%Y-%m-%d")
     with _DB_LOCK:
         conn = db()
         # 保存前在服务端去重，不能只依赖前端的 saved_job_id。
-        existing = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
-        if not existing and job.get("url"):
-            normalized_url = normalize_job_url(job.get("url"))
-            rows = conn.execute("SELECT id, url FROM jobs WHERE url IS NOT NULL AND url != ''").fetchall()
-            existing = next((row for row in rows if normalize_job_url(row["url"]) == normalized_url), None)
-        if not existing and job.get("title") and job.get("company"):
-            existing = conn.execute(
-                "SELECT id FROM jobs WHERE lower(title)=lower(?) AND lower(company)=lower(?) AND coalesce(city,'')=coalesce(?, '') LIMIT 1",
-                (job.get("title"), job.get("company"), job.get("city", "")),
-            ).fetchone()
+        existing = _find_existing_job(conn, job)
         if existing:
             conn.close()
-            return existing["id"]
+            return existing
         conn.execute(
             """INSERT OR IGNORE INTO jobs
                (id, title, company, city, posting_type, work_type, experience,
@@ -3202,6 +3217,43 @@ class Handler(BaseHTTPRequestHandler):
         if head == "sources" and len(parts) >= 2 and parts[1] == "health" and method == "GET":
             from http_client import health_snapshot
             self._send(200, {"ok": True, "sources": health_snapshot()})
+            return
+
+        if head == "jobs" and len(parts) >= 2 and parts[1] == "import" and method == "POST":
+            # 批量导入岗位（本地采集器调用）：去重 + 评分 + 入库
+            body = self._json_body()
+            jobs = (body or {}).get("jobs") or []
+            if not jobs or not isinstance(jobs, list) or len(jobs) > 200:
+                self._send(400, {"ok": False, "error": "导入数量需在 1-200 之间"})
+                return
+            profile = normalize_profile(_safe_json(user.get("profile_json"), {}))
+            added, skipped, failed = 0, 0, 0
+            with _DB_LOCK:
+                conn = db()
+                for item in jobs:
+                    if not isinstance(item, dict) or not str(item.get("title") or "").strip() or not str(item.get("company") or "").strip():
+                        failed += 1
+                        continue
+                    item = {k: str(v or "").strip() for k, v in item.items() if k != "id"}
+                    if not item.get("source"):
+                        item["source"] = "采集器"
+                    try:
+                        if _find_existing_job(conn, item):
+                            skipped += 1
+                            continue
+                        job_id = add_job(item)
+                        if job_id:
+                            job = get_job(job_id)
+                            ev = score_job(job, profile)
+                            save_evaluation(user["id"], ev)
+                            added += 1
+                        else:
+                            failed += 1
+                    except Exception:
+                        failed += 1
+                conn.commit()
+                conn.close()
+            self._send(200, {"ok": True, "added": added, "skipped": skipped, "failed": failed})
             return
 
         # 投递材料包：一键生成 招呼语 + 定制简历 + 求职信（同步，失败各自兜底）

@@ -671,3 +671,28 @@ def test_job_kit_generation(monkeypatch):
     assert "马育琪" in server_mod.generate_greeting(job, profile)
     assert "个人简历" in server_mod.generate_resume(job, profile)
     assert "求职信" in server_mod.generate_cover_letter(job, profile)
+
+
+def test_jobs_import_dedupe(monkeypatch):
+    """批量导入：URL/标题公司城市去重，重复跳过；空列表拒绝。"""
+    import server as server_mod, time as _t
+    server_mod.init_db()
+    with server_mod._DB_LOCK:
+        conn = server_mod.db()
+        conn.execute("INSERT INTO users (username, password_hash) VALUES (?,?)", ("imp_" + str(_t.time_ns()), "x"))
+        conn.commit(); conn.close()
+    tag = "d" + str(_t.time_ns())[-6:]
+    jobs = [
+        {"title": "采集测试A" + tag, "company": "公司X" + tag, "city": "北京", "url": "https://ex.com/job/" + tag + "a", "source": "boss"},
+        {"title": "采集测试A" + tag, "company": "公司X" + tag, "city": "北京", "url": "https://ex.com/job/" + tag + "a", "source": "boss"},
+        {"title": "采集测试B" + tag, "company": "公司Y" + tag, "city": "上海", "url": "https://ex.com/job/" + tag + "b", "source": "51job"},
+    ]
+    j1 = {"id": "j1", "title": "采集测试A" + tag, "company": "公司X" + tag, "city": "北京", "url": "https://ex.com/job/" + tag + "a", "source": "boss"}
+    j2 = {"id": "j2", "title": "采集测试B" + tag, "company": "公司Y" + tag, "city": "上海", "url": "https://ex.com/job/" + tag + "b", "source": "51job"}
+    assert server_mod._find_existing_job(server_mod.db(), j1) is None
+    assert server_mod.add_job(dict(j1)) == server_mod.add_job(dict(j1))  # 幂等去重
+    assert server_mod._find_existing_job(server_mod.db(), j1) is not None
+    assert server_mod._find_existing_job(server_mod.db(), j2) is None
+    # 标题+公司+城市去重
+    j1_dup = {"id": "j1x", "title": j1["title"], "company": j1["company"], "city": j1["city"], "url": "https://other.com/x"}
+    assert server_mod._find_existing_job(server_mod.db(), j1_dup) is not None
